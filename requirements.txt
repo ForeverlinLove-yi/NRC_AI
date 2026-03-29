@@ -1,0 +1,3 @@
+# 洛克王国战斗模拟系统依赖
+# 运行: pip install -r requirements.txt
+# 然后执行: python src/main.py
