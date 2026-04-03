@@ -1,12 +1,12 @@
 """
-技能数据库 - 从CSV加载并解析技能效果
+技能数据库 - 从 SQLite 加载并解析技能效果
 """
-
-import csv
 import os
 import re
-import sys
+import sqlite3
+from typing import Optional, Dict, List
 
+import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.models import Skill, Type, SkillCategory, TYPE_NAME_MAP, CATEGORY_NAME_MAP
 
@@ -14,7 +14,40 @@ from src.models import Skill, Type, SkillCategory, TYPE_NAME_MAP, CATEGORY_NAME_
 SPECIAL_TYPES = {Type.FIRE, Type.WATER, Type.GRASS, Type.ELECTRIC, Type.ICE,
                  Type.PSYCHIC, Type.DRAGON, Type.DARK, Type.FAIRY}
 
+_conn: Optional[sqlite3.Connection] = None
 _skill_db: dict = {}
+_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "data", "nrc.db")
+
+# 属性中文名→Type (包含短名)
+_TYPE_MAP = {
+    "普通": Type.NORMAL, "火": Type.FIRE, "水": Type.WATER, "草": Type.GRASS,
+    "电": Type.ELECTRIC, "冰": Type.ICE, "武": Type.FIGHTING, "毒": Type.POISON,
+    "地": Type.GROUND, "翼": Type.FLYING, "幻": Type.PSYCHIC, "虫": Type.BUG,
+    "岩": Type.ROCK, "幽": Type.GHOST, "龙": Type.DRAGON, "恶": Type.DARK,
+    "机械": Type.STEEL, "萌": Type.FAIRY, "光": Type.PSYCHIC,
+    "未知": Type.NORMAL, "—": Type.NORMAL,
+}
+_TYPE_MAP.update(TYPE_NAME_MAP)
+
+# 分类中文名→SkillCategory (含 wiki 用语)
+_CAT_MAP = {
+    "物理": SkillCategory.PHYSICAL, "魔法": SkillCategory.MAGICAL,
+    "防御": SkillCategory.DEFENSE, "状态": SkillCategory.STATUS,
+    "物攻": SkillCategory.PHYSICAL, "魔攻": SkillCategory.MAGICAL,
+    "变化": SkillCategory.STATUS, "—": SkillCategory.STATUS,
+}
+_CAT_MAP.update(CATEGORY_NAME_MAP)
+
+
+def _get_conn() -> sqlite3.Connection:
+    global _conn
+    if _conn is None:
+        if not os.path.exists(_DB_PATH):
+            raise FileNotFoundError(f"Database not found: {_DB_PATH}")
+        _conn = sqlite3.connect(_DB_PATH)
+        _conn.row_factory = sqlite3.Row
+    return _conn
 
 
 def parse_effect(skill: Skill, desc: str) -> Skill:
@@ -65,8 +98,8 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
     if m:
         skill.priority_mod = -int(m.group(1))
 
-    # 脱离
-    if '脱离' in d:
+    # 折返/脱离
+    if '折返' in d or '脱离' in d:
         skill.force_switch = True
 
     # 迅捷
@@ -76,6 +109,24 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
     # 蓄力
     if '蓄力' in d:
         skill.charge = True
+
+    # 寄生
+    m = re.search(r'(\d+)层寄生', d)
+    if m:
+        skill.leech_stacks = int(m.group(1))
+    elif '寄生' in d:
+        skill.leech_stacks = 1
+
+    # 星陨
+    m = re.search(r'(\d+)层星陨', d)
+    if m:
+        skill.meteor_stacks = int(m.group(1))
+    elif '星陨' in d:
+        skill.meteor_stacks = 1
+
+    # 印记/场效
+    if '印记' in d or '场地' in d or '全队' in d:
+        skill.is_mark = True
 
     # 自身属性增益
     def parse_self_stat(pattern, field):
@@ -87,19 +138,13 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
     parse_self_stat(r'获得魔攻\+(\d+)%', 'self_spatk')
     parse_self_stat(r'获得物防\+(\d+)%', 'self_def')
     parse_self_stat(r'获得魔防\+(\d+)%', 'self_spdef')
-    parse_self_stat(r'获得速度\+(\d+)', 'self_speed')
-    parse_self_stat(r'获得速度-(\d+)', 'self_speed')  # speed is flat, handle below
 
-    # 速度是固定值加减
     m = re.search(r'获得速度\+(\d+)', d)
     if m:
-        # 速度+120 意味着速度修正+120/100=1.2 (相对于基础速度)
-        val = int(m.group(1))
-        skill.self_speed = val / 100.0
+        skill.self_speed = int(m.group(1)) / 100.0
     m = re.search(r'获得速度-(\d+)', d)
     if m:
-        val = int(m.group(1))
-        skill.self_speed = -val / 100.0
+        skill.self_speed = -int(m.group(1)) / 100.0
 
     # 双攻/双防
     m = re.search(r'双攻\+(\d+)%', d)
@@ -107,29 +152,11 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
         v = int(m.group(1)) / 100.0
         skill.self_atk += v
         skill.self_spatk += v
-    m = re.search(r'双攻-(\d+)%', d)
-    if m:
-        v = int(m.group(1)) / 100.0
-        skill.self_atk -= v
-        skill.self_spatk -= v
     m = re.search(r'双防\+(\d+)%', d)
     if m:
         v = int(m.group(1)) / 100.0
         skill.self_def += v
         skill.self_spdef += v
-    m = re.search(r'双防-(\d+)%', d)
-    if m:
-        v = int(m.group(1)) / 100.0
-        skill.self_def -= v
-        skill.self_spdef -= v
-
-    # 技能威力
-    m = re.search(r'获得技能威力\+(\d+)', d)
-    if m:
-        skill.power += int(m.group(1))
-    m = re.search(r'全技能威力\+(\d+)', d)
-    if m:
-        skill.power += int(m.group(1))
 
     # 敌方属性减益
     def parse_enemy_stat(pattern, field):
@@ -159,11 +186,11 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
     m = re.search(r'敌方获得全技能能耗\+(\d+)', d)
     if m:
         skill.enemy_energy_cost_up = int(m.group(1))
+    m = re.search(r'技能能耗\+(\d+)', d)
+    if m and skill.enemy_energy_cost_up == 0:
+        skill.enemy_energy_cost_up = int(m.group(1))
 
-    # ===== 应对效果解析 =====
-    # 简化：应对攻击 = 应对物攻/魔攻; 应对防御 = 对方防御; 应对状态 = 对方状态
-
-    # 应对攻击的额外效果
+    # 应对攻击
     if '应对攻击' in d:
         m = re.search(r'应对攻击.*?吸血(\d+)%', d)
         if m:
@@ -171,17 +198,8 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
         m = re.search(r'应对攻击.*?失去(\d+)能量', d)
         if m:
             skill.counter_physical_energy_drain = int(m.group(1))
-        m = re.search(r'应对攻击.*?物攻\+(\d+)%', d)
-        if m:
-            skill.counter_physical_self_atk = int(m.group(1)) / 100.0
-        m = re.search(r'应对攻击.*?物防-(\d+)%', d)
-        if m:
-            skill.counter_physical_enemy_def = int(m.group(1)) / 100.0
-        m = re.search(r'应对攻击.*?物攻-(\d+)%', d)
-        if m:
-            skill.counter_physical_enemy_atk = int(m.group(1)) / 100.0
 
-    # 应对状态的额外效果
+    # 应对状态
     if '应对状态' in d:
         m = re.search(r'应对状态.*?威力.*?(\d+)倍', d)
         if m:
@@ -189,103 +207,57 @@ def parse_effect(skill: Skill, desc: str) -> Skill:
         m = re.search(r'应对状态.*?翻倍', d)
         if m and skill.counter_status_power_mult == 0:
             skill.counter_status_power_mult = 2
-        m = re.search(r'应对状态.*?失去(\d+)能量', d)
-        if m:
-            skill.counter_status_enemy_lose_energy = int(m.group(1))
-        m = re.search(r'应对状态.*?物攻\+(\d+)%', d)
-        if m:
-            skill.counter_status_self_atk = int(m.group(1)) / 100.0
-        m = re.search(r'应对状态.*?吸血(\d+)%', d)
-        if m:
-            skill.counter_physical_drain = int(m.group(1)) / 100.0
 
-    # 应对防御的额外效果
+    # 应对防御
     if '应对防御' in d:
         m = re.search(r'应对防御.*?物攻\+(\d+)%', d)
         if m:
             skill.counter_defense_self_atk = int(m.group(1)) / 100.0
-        m = re.search(r'应对防御.*?物防\+(\d+)%', d)
-        if m:
-            skill.counter_defense_self_def = int(m.group(1)) / 100.0
-        m = re.search(r'应对防御.*?物防-(\d+)%', d)
-        if m:
-            skill.counter_defense_enemy_def = int(m.group(1)) / 100.0
-        m = re.search(r'应对防御.*?双防-(\d+)%', d)
-        if m:
-            v = int(m.group(1)) / 100.0
-            skill.counter_defense_enemy_def += v
-        m = re.search(r'应对防御.*?攻击技能能耗\+(\d+)', d)
-        if m:
-            skill.counter_defense_enemy_energy_cost = int(m.group(1))
-        m = re.search(r'应对防御.*?失去(\d+)能量', d)
-        if m:
-            skill.counter_defense_enemy_energy_cost = int(m.group(1))
-        m = re.search(r'应对防御.*?(\d+)层中毒', d)
-        if m:
-            skill.counter_status_poison_stacks = int(m.group(1))
-
-    return skill
-
-
-def _parse_csv_row(row):
-    """解析CSV行"""
-    name = row[0].strip()
-    if not name:
-        return None
-
-    skill_type = TYPE_NAME_MAP.get(row[1].strip(), Type.NORMAL)
-    category = CATEGORY_NAME_MAP.get(row[2].strip(), SkillCategory.PHYSICAL)
-
-    power = 0
-    try:
-        power = int(row[3].strip())
-    except (ValueError, IndexError):
-        pass
-
-    energy = 0
-    try:
-        energy = int(row[4].strip())
-    except (ValueError, IndexError):
-        pass
-
-    desc = row[5].strip() if len(row) > 5 else ""
-
-    skill = Skill(
-        name=name, skill_type=skill_type, category=category,
-        power=power, energy_cost=energy,
-    )
-
-    if desc:
-        parse_effect(skill, desc)
 
     return skill
 
 
 def load_skills(csv_path: str = None) -> dict:
-    """加载技能数据库"""
+    """从 SQLite 加载技能数据库（兼容旧接口）"""
     global _skill_db
     if _skill_db:
         return _skill_db
 
-    if csv_path is None:
-        csv_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "skills_all.csv"
+    # 加载效果数据配置 (新引擎)
+    try:
+        from src.effect_data import SKILL_EFFECTS
+    except ImportError:
+        SKILL_EFFECTS = {}
+
+    conn = _get_conn()
+    c = conn.cursor()
+    c.execute("SELECT * FROM skill")
+
+    new_count = 0
+    for row in c.fetchall():
+        name = row["name"]
+        element = _TYPE_MAP.get(row["element"], Type.NORMAL)
+        category = _CAT_MAP.get(row["category"], SkillCategory.STATUS)
+        power = row["power"] or 0
+        energy = row["energy_cost"] or 0
+        desc = row["description"] or ""
+
+        skill = Skill(
+            name=name, skill_type=element, category=category,
+            power=power, energy_cost=energy,
         )
 
-    if not os.path.exists(csv_path):
-        print(f"[WARN] Skill DB not found: {csv_path}")
-        return {}
+        # 优先使用新引擎的效果数据
+        if name in SKILL_EFFECTS:
+            skill.effects = SKILL_EFFECTS[name]
+            new_count += 1
+        elif desc:
+            # 旧技能仍走正则解析
+            parse_effect(skill, desc)
 
-    with open(csv_path, "r", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        for row in reader:
-            skill = _parse_csv_row(row)
-            if skill:
-                _skill_db[skill.name] = skill
+        _skill_db[name] = skill
 
-    print(f"[OK] Loaded {len(_skill_db)} skills from DB")
+    print(f"[OK] Loaded {len(_skill_db)} skills from DB ({new_count} with new effect engine)")
     return _skill_db
 
 
@@ -302,3 +274,37 @@ def get_all_skills() -> dict:
     """获取所有技能"""
     load_skills()
     return dict(_skill_db)
+
+
+def get_skill_learners(skill_name: str) -> List[str]:
+    """获取能学习某技能的精灵列表"""
+    conn = _get_conn()
+    c = conn.cursor()
+    c.execute("""
+        SELECT p.name FROM pokemon p
+        JOIN pokemon_skill ps ON ps.pokemon_id = p.id
+        JOIN skill s ON ps.skill_id = s.id
+        WHERE s.name = ?
+    """, (skill_name,))
+    return [r[0] for r in c.fetchall()]
+
+
+def load_ability_effects(ability_str: str) -> list:
+    """
+    根据精灵的特性字符串 (格式: '特性名:描述') 返回 AbilityEffect 列表。
+    如果特性在 ABILITY_EFFECTS 中有配置则返回配置, 否则返回空列表。
+    """
+    try:
+        from src.effect_data import ABILITY_EFFECTS
+    except ImportError:
+        return []
+
+    # 提取特性名
+    if ":" in ability_str:
+        name = ability_str.split(":")[0]
+    elif "：" in ability_str:
+        name = ability_str.split("：")[0]
+    else:
+        name = ability_str
+
+    return ABILITY_EFFECTS.get(name, [])

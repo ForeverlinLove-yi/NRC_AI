@@ -3,18 +3,12 @@
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from enum import Enum
 
 
 class StatusType(Enum):
     NORMAL = "normal"
-    POISONED = "poisoned"
-    BURNED = "burned"
-    PARALYZED = "paralyzed"
-    FROZEN = "frozen"
-    SLEEP = "sleep"
-    CONFUSED = "confused"
     FAINTED = "fainted"
 
 
@@ -120,9 +114,12 @@ class Skill:
     enemy_lose_energy: int = 0     # 敌方失去能量
     enemy_energy_cost_up: int = 0  # 敌方技能能耗+X
     priority_mod: int = 0          # 先手修正
-    force_switch: bool = False     # 脱离
-    agility: bool = False          # 迅捷
-    charge: bool = False           # 蓄力
+    force_switch: bool = False     # 折返/脱离
+    agility: bool = False          # 迅捷：主动换人入场时自动释放
+    charge: bool = False           # 蓄力：本回合蓄力，下回合释放
+    leech_stacks: int = 0          # 寄生层数 (每层8%/回合)
+    meteor_stacks: int = 0         # 星陨层数 (3回合后每层30威力魔攻伤害)
+    is_mark: bool = False          # True=印记(同位置各1正1负), False=个体Buff(换人消失)
 
     # 自身属性修改 (加法叠加, 1.0表示+100%)
     self_atk: float = 0
@@ -168,8 +165,11 @@ class Skill:
     counter_skill_cooldown: int = 0       # 被应对技能冷却
     counter_damage_reflect: float = 0    # 反弹伤害比例
 
+    # ── 新引擎字段 ──
+    effects: List[Any] = field(default_factory=list)  # List[EffectTag], 有值则走新引擎
+
     def copy(self):
-        return Skill(
+        s = Skill(
             name=self.name, skill_type=self.skill_type, category=self.category,
             power=self.power, energy_cost=self.energy_cost, hit_count=self.hit_count,
             life_drain=self.life_drain, damage_reduction=self.damage_reduction,
@@ -177,6 +177,8 @@ class Skill:
             steal_energy=self.steal_energy, enemy_lose_energy=self.enemy_lose_energy,
             enemy_energy_cost_up=self.enemy_energy_cost_up, priority_mod=self.priority_mod,
             force_switch=self.force_switch, agility=self.agility, charge=self.charge,
+            leech_stacks=self.leech_stacks, meteor_stacks=self.meteor_stacks,
+            is_mark=self.is_mark,
             self_atk=self.self_atk, self_def=self.self_def, self_spatk=self.self_spatk,
             self_spdef=self.self_spdef, self_speed=self.self_speed,
             self_all_atk=self.self_all_atk, self_all_def=self.self_all_def,
@@ -206,6 +208,8 @@ class Skill:
             counter_skill_cooldown=self.counter_skill_cooldown,
             counter_damage_reflect=self.counter_damage_reflect,
         )
+        s.effects = [e.copy() for e in self.effects] if self.effects else []
+        return s
 
 
 @dataclass
@@ -227,6 +231,7 @@ class Pokemon:
     status: StatusType = StatusType.NORMAL
 
     # 百分比属性修正器 (1.0 = +100%, -0.5 = -50%)
+    # 上下界: [-0.9, 4.0]
     atk_mod: float = 0.0
     def_mod: float = 0.0
     spatk_mod: float = 0.0
@@ -234,12 +239,25 @@ class Pokemon:
     speed_mod: float = 0.0
 
     # 状态层数
-    poison_stacks: int = 0
-    burn_stacks: int = 0
-    freeze_stacks: int = 0
+    poison_stacks: int = 0          # 中毒层数 (每层3%/回合, 换人清除)
+    burn_stacks: int = 0            # 燃烧层数 (每层4%/回合, 每回合减半min1, 换人清除)
+    frostbite_damage: int = 0       # 冻伤累计不可恢复伤害 (每回合+hp//12, 换人不清除)
+    leech_stacks: int = 0           # 寄生层数 (每层8%/回合, 换人清除)
+    meteor_stacks: int = 0          # 星陨层数 (延迟爆炸)
+    meteor_countdown: int = 0       # 星陨倒计时 (>0时每回合-1, =0时引爆)
+
+    # 蓄力状态
+    charging_skill_idx: int = -1    # 正在蓄力的技能index (-1=没有蓄力)
 
     # 技能冷却 (index -> cooldown turns remaining)
     cooldowns: Dict[int, int] = field(default_factory=dict)
+
+    # 旧字段保留兼容
+    freeze_stacks: int = 0
+
+    # ── 新引擎字段 ──
+    ability_effects: List[Any] = field(default_factory=list)  # List[AbilityEffect]
+    ability_state: Dict[str, Any] = field(default_factory=dict)  # 特性运行时状态
 
     def __post_init__(self):
         if self.current_hp == 0:
@@ -250,31 +268,33 @@ class Pokemon:
         return self.current_hp <= 0 or self.status == StatusType.FAINTED
 
     @property
-    def can_attack(self) -> bool:
-        if self.is_fainted:
-            return False
-        if self.status in (StatusType.SLEEP, StatusType.FROZEN):
-            return False
-        return True
+    def effective_max_hp(self) -> int:
+        """冻伤后的有效最大HP (从左侧侵蚀)"""
+        return max(0, self.hp - self.frostbite_damage)
 
     def gain_energy(self, amount: int) -> None:
         """增加能量，不超过上限10"""
         self.energy = min(10, self.energy + amount)
 
+    @staticmethod
+    def _clamp_mod(val: float) -> float:
+        """将属性修正限制在 [-0.9, 4.0] 范围"""
+        return max(-0.9, min(4.0, val))
+
     def effective_atk(self) -> float:
-        return self.attack * max(0.1, 1.0 + self.atk_mod)
+        return self.attack * (1.0 + self._clamp_mod(self.atk_mod))
 
     def effective_def(self) -> float:
-        return self.defense * max(0.1, 1.0 + self.def_mod)
+        return self.defense * (1.0 + self._clamp_mod(self.def_mod))
 
     def effective_spatk(self) -> float:
-        return self.sp_attack * max(0.1, 1.0 + self.spatk_mod)
+        return self.sp_attack * (1.0 + self._clamp_mod(self.spatk_mod))
 
     def effective_spdef(self) -> float:
-        return self.sp_defense * max(0.1, 1.0 + self.spdef_mod)
+        return self.sp_defense * (1.0 + self._clamp_mod(self.spdef_mod))
 
     def effective_speed(self) -> float:
-        return self.speed * max(0.1, 1.0 + self.speed_mod)
+        return self.speed * (1.0 + self._clamp_mod(self.speed_mod))
 
     def apply_self_buff(self, skill: Skill) -> None:
         """应用技能的自身增益"""
@@ -291,6 +311,19 @@ class Pokemon:
         self.spatk_mod -= skill.enemy_spatk + skill.enemy_all_atk
         self.spdef_mod -= skill.enemy_spdef + skill.enemy_all_def
         self.speed_mod -= skill.enemy_speed
+
+    def on_switch_out(self) -> None:
+        """下场时清除：个体Buff + 中毒 + 燃烧 + 寄生 + 蓄力。冻伤和星陨保留。"""
+        self.atk_mod = 0.0
+        self.def_mod = 0.0
+        self.spatk_mod = 0.0
+        self.spdef_mod = 0.0
+        self.speed_mod = 0.0
+        self.poison_stacks = 0
+        self.burn_stacks = 0
+        self.leech_stacks = 0
+        self.freeze_stacks = 0
+        self.charging_skill_idx = -1
 
     def reset_mods(self) -> None:
         """重置所有修正"""
@@ -314,8 +347,16 @@ class Pokemon:
         p.speed_mod = self.speed_mod
         p.poison_stacks = self.poison_stacks
         p.burn_stacks = self.burn_stacks
+        p.frostbite_damage = self.frostbite_damage
+        p.leech_stacks = self.leech_stacks
+        p.meteor_stacks = self.meteor_stacks
+        p.meteor_countdown = self.meteor_countdown
+        p.charging_skill_idx = self.charging_skill_idx
         p.freeze_stacks = self.freeze_stacks
         p.cooldowns = dict(self.cooldowns)
+        # 新引擎字段
+        p.ability_effects = [ae.copy() for ae in self.ability_effects] if self.ability_effects else []
+        p.ability_state = dict(self.ability_state)
         return p
 
 
@@ -329,15 +370,37 @@ class BattleState:
     turn: int = 1
     weather: Optional[str] = None
 
+    # 魔法值：初始4，精灵倒下-1，降到0则败北
+    mp_a: int = 4
+    mp_b: int = 4
+
+    # 印记/场效 (全队共享Buff, 不随换人消失)
+    # 结构: {"atk": 0.3, "def": 0.2, "poison_mark": 3, ...}
+    marks_a: Dict[str, float] = field(default_factory=dict)
+    marks_b: Dict[str, float] = field(default_factory=dict)
+
+    # 全队应对计数 (海豹船长特性需要)
+    counter_count_a: int = 0
+    counter_count_b: int = 0
+
+    # 本回合敌方是否换人 (嘲弄条件增益用)
+    switch_this_turn_a: bool = False
+    switch_this_turn_b: bool = False
+
     def get_current(self, team: str) -> Pokemon:
         if team == "a":
             return self.team_a[self.current_a]
         return self.team_b[self.current_b]
 
     def deep_copy(self) -> 'BattleState':
-        return BattleState(
+        bs = BattleState(
             team_a=[p.copy_state() for p in self.team_a],
             team_b=[p.copy_state() for p in self.team_b],
             current_a=self.current_a, current_b=self.current_b,
             turn=self.turn, weather=self.weather,
+            mp_a=self.mp_a, mp_b=self.mp_b,
+            marks_a=dict(self.marks_a), marks_b=dict(self.marks_b),
+            counter_count_a=self.counter_count_a,
+            counter_count_b=self.counter_count_b,
         )
+        return bs

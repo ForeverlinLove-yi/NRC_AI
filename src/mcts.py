@@ -44,20 +44,22 @@ class ExperienceMemory:
 
     def state_key(self, state: BattleState, team: str) -> str:
         """
-        生成粗化状态签名（v3）
+        生成粗化状态签名（v4 - 新规则适配）
         
         改进：
-        - HP 分4档（满/高/低/残）替代精确百分比，泛化能力大幅提升
-        - 能量分3档（满/中/低）替代精确数值
-        - 存活数差（-5到+5）替代具体 XvY
-        - buff 保留正/零/负三档
-        - 回合分桶保留（每5回合一档）
+        - HP 分4档（满/高/低/残）
+        - 能量分3档（满/中/低）
+        - MP差值 (-4到+4)
+        - 存活数差
+        - buff 正/零/负
+        - 冻伤/寄生标记
+        - 回合分桶
         """
         p = state.get_current(team)
         enemy_team_str = "b" if team == "a" else "a"
         e = state.get_current(enemy_team_str)
         
-        # HP 分4档：满(=100%) / 高(>60%) / 低(>25%) / 残(<=25%)
+        # HP 分4档
         def hp_bucket(pokemon):
             if pokemon.hp <= 0:
                 return "死"
@@ -71,7 +73,7 @@ class ExperienceMemory:
             else:
                 return "残"
         
-        # 能量分3档：满(>=8) / 中(>=4) / 低(<4)
+        # 能量分3档
         def energy_bucket(energy):
             if energy >= 8:
                 return "满"
@@ -84,16 +86,36 @@ class ExperienceMemory:
         enemy_team_list = state.team_b if team == "a" else state.team_a
         my_alive = sum(1 for pk in my_team if not pk.is_fainted)
         enemy_alive = sum(1 for pk in enemy_team_list if not pk.is_fainted)
-        alive_diff = my_alive - enemy_alive  # -5 到 +5
+        alive_diff = my_alive - enemy_alive
         
-        # buff 简化为正/零/负三档
+        # MP 差值
+        my_mp = state.mp_a if team == "a" else state.mp_b
+        enemy_mp = state.mp_b if team == "a" else state.mp_a
+        mp_diff = my_mp - enemy_mp
+        
+        # buff 简化为正/零/负
         atk_sign = "+" if p.atk_mod > 0 else ("-" if p.atk_mod < 0 else "0")
         def_sign = "+" if p.def_mod > 0 else ("-" if p.def_mod < 0 else "0")
+        
+        # 状态标记
+        status_flags = ""
+        if p.poison_stacks > 0:
+            status_flags += "毒"
+        if p.burn_stacks > 0:
+            status_flags += "烧"
+        if p.frostbite_damage > 0:
+            status_flags += "冻"
+        if p.leech_stacks > 0:
+            status_flags += "寄"
+        if p.meteor_countdown > 0:
+            status_flags += "陨"
+        if not status_flags:
+            status_flags = "-"
         
         round_bin = min(state.turn // 5, 10)
         
         return (f"{p.name}|{hp_bucket(p)}|{energy_bucket(p.energy)}|{atk_sign}{def_sign}"
-                f"|{e.name}|{hp_bucket(e)}|{alive_diff:+d}|{round_bin}")
+                f"|{e.name}|{hp_bucket(e)}|{alive_diff:+d}|mp{mp_diff:+d}|{status_flags}|{round_bin}")
 
     def record_action(self, state_key: str, action: Action, score: float):
         """记录一次动作的结果（score: 0.0~1.0 的奖励值）"""

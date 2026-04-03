@@ -47,6 +47,56 @@ def action_name(state, team, action):
     return current.skills[action[0]].name
 
 
+# ── 被动换人回调 ──
+
+def _ai_switch_callback(mcts_instance, team):
+    """创建AI被动换人回调: 用MCTS评估选哪只精灵上场"""
+    def callback(state, team_list, alive_indices):
+        # 简单策略: 评估每只候选精灵的HP比和属性克制
+        best_idx = alive_indices[0]
+        best_score = -999
+        enemy = state.get_current("b" if team == "a" else "a")
+        for idx in alive_indices:
+            p = team_list[idx]
+            # HP 越高越好
+            hp_score = p.current_hp / max(1, p.hp) * 50
+            # 属性克制加分
+            from src.models import get_type_effectiveness
+            eff = 0
+            for s in p.skills:
+                if s.power > 0:
+                    eff = max(eff, get_type_effectiveness(s.skill_type, enemy.pokemon_type))
+            type_score = (eff - 1.0) * 30
+            score = hp_score + type_score
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+        return best_idx
+    return callback
+
+
+def _player_switch_callback(state, team_list, alive_indices):
+    """玩家被动换人回调: 让玩家从终端选择"""
+    print("\n  ╔══════════════════════════════════════╗", flush=True)
+    print("  ║  你的精灵倒下了! 选择下一只上场:     ║", flush=True)
+    print("  ╚══════════════════════════════════════╝", flush=True)
+    for idx in alive_indices:
+        p = team_list[idx]
+        bar = _hp_bar(p.current_hp, p.hp)
+        skills_str = ", ".join(s.name for s in p.skills)
+        print(f"    {idx+1}. {p.name} {bar} E={p.energy} | {skills_str}", flush=True)
+
+    while True:
+        try:
+            raw = input("\n  选择 [输入编号]: ").strip()
+            chosen = int(raw) - 1
+            if chosen in alive_indices:
+                return chosen
+            print("  无效选择! 请选择存活的精灵编号。", flush=True)
+        except (ValueError, EOFError, KeyboardInterrupt):
+            print("  无效输入!", flush=True)
+
+
 def run_single_battle(simulations=200, verbose=True, use_experience=True):
     """运行单场对战"""
     state = create_initial_state()
@@ -65,6 +115,10 @@ def run_single_battle(simulations=200, verbose=True, use_experience=True):
     mcts_b = MCTS(simulations=simulations, team="b",
                   experience=EXPERIENCE_B if use_experience else None)
 
+    # AI 被动换人回调
+    cb_a = _ai_switch_callback(mcts_a, "a")
+    cb_b = _ai_switch_callback(mcts_b, "b")
+
     start_time = time.time()
 
     for _ in range(150):
@@ -72,7 +126,7 @@ def run_single_battle(simulations=200, verbose=True, use_experience=True):
         if winner:
             if verbose:
                 w = "A (Toxic)" if winner == "a" else "B (Wing King)"
-                print(f"\n>>> Team {w} WINS!", flush=True)
+                print(f"\n>>> Team {w} WINS! (MP: A={state.mp_a}, B={state.mp_b})", flush=True)
             # 记录经验
             if use_experience:
                 EXPERIENCE_A.record_battle(mcts_a.get_action_log(), won=(winner == "a"))
@@ -81,7 +135,7 @@ def run_single_battle(simulations=200, verbose=True, use_experience=True):
                 mcts_b.clear_log()
             return winner, state.turn, time.time() - start_time
 
-        auto_switch(state)
+        auto_switch(state, cb_a, cb_b)
         if check_winner(state):
             break
 
@@ -89,7 +143,7 @@ def run_single_battle(simulations=200, verbose=True, use_experience=True):
         p_b = state.team_b[state.current_b]
 
         if verbose and state.turn <= 20:
-            print(f"\n--- Round {state.turn} ---", flush=True)
+            print(f"\n--- Round {state.turn} --- [MP: A={state.mp_a} B={state.mp_b}]", flush=True)
             print(f"[A] {p_a.name}: HP={max(0,p_a.current_hp)}/{p_a.hp} EP={p_a.energy}", flush=True)
             print(f"[B] {p_b.name}: HP={max(0,p_b.current_hp)}/{p_b.hp} EP={p_b.energy}", flush=True)
 
@@ -103,7 +157,7 @@ def run_single_battle(simulations=200, verbose=True, use_experience=True):
         if verbose and state.turn <= 20:
             print(f"  A: {action_name(state,'a',action_a)} ({t_a:.2f}s) | B: {action_name(state,'b',action_b)} ({t_b:.2f}s)", flush=True)
 
-        execute_full_turn(state, action_a, action_b)
+        execute_full_turn(state, action_a, action_b, cb_a, cb_b)
 
         if verbose and state.turn <= 20:
             p_a2 = state.team_a[state.current_a]
@@ -245,15 +299,22 @@ def run_player_vs_ai(simulations=200):
     mcts_b = MCTS(simulations=simulations, team="b",
                   experience=EXPERIENCE_B)
 
+    # 被动换人回调: 玩家选择A队, AI选择B队
+    cb_a = _player_switch_callback
+    cb_b = _ai_switch_callback(mcts_b, "b")
+
     def show_status():
         pa = state.team_a[state.current_a]
         pb = state.team_b[state.current_b]
         bar_a = _hp_bar(pa.current_hp, pa.hp)
         bar_b = _hp_bar(pb.current_hp, pb.hp)
-        print(f"\n  [A] {pa.name} HP {bar_a} {max(0,pa.current_hp)}/{pa.hp} | 能量:{pa.energy}", flush=True)
-        print(f"      增益:{_fmt_mods(pa)} | 减益:{_fmt_debuffs(pa)} | 中毒:{pa.poison_stacks} 灼烧:{pa.burn_stacks} 冻结:{pa.freeze_stacks}", flush=True)
+        print(f"\n  [MP: 你={state.mp_a} | AI={state.mp_b}]", flush=True)
+        print(f"  [A] {pa.name} HP {bar_a} {max(0,pa.current_hp)}/{pa.hp} | 能量:{pa.energy}", flush=True)
+        status_a = _fmt_status(pa)
+        print(f"      增益:{_fmt_mods(pa)} | 减益:{_fmt_debuffs(pa)} | {status_a}", flush=True)
         print(f"  [B] {pb.name} HP {bar_b} {max(0,pb.current_hp)}/{pb.hp} | 能量:{pb.energy}", flush=True)
-        print(f"      增益:{_fmt_mods(pb)} | 减益:{_fmt_debuffs(pb)} | 中毒:{pb.poison_stacks} 灼烧:{pb.burn_stacks} 冻结:{pb.freeze_stacks}", flush=True)
+        status_b = _fmt_status(pb)
+        print(f"      增益:{_fmt_mods(pb)} | 减益:{_fmt_debuffs(pb)} | {status_b}", flush=True)
 
     def get_player_action():
         pa = state.team_a[state.current_a]
@@ -311,6 +372,7 @@ def run_player_vs_ai(simulations=200):
             w = "你赢了! PLAYER WINS!" if winner == "a" else "AI赢了! AI WINS!"
             print(f"\n{'='*55}", flush=True)
             print(f"  >>> {w}", flush=True)
+            print(f"  MP: 你={state.mp_a} | AI={state.mp_b}", flush=True)
             print(f"  对战 {state.turn} 回合, 耗时 {time.time()-start_time:.1f}s", flush=True)
             print(f"{'='*55}", flush=True)
             # AI记录经验
@@ -318,7 +380,7 @@ def run_player_vs_ai(simulations=200):
             mcts_b.clear_log()
             return winner
 
-        auto_switch(state)
+        auto_switch(state, cb_a, cb_b)
         if check_winner(state):
             break
 
@@ -341,7 +403,7 @@ def run_player_vs_ai(simulations=200):
 
         # 执行
         print(f"\n  --- 执行 ---", flush=True)
-        execute_full_turn(state, action_a, action_b)
+        execute_full_turn(state, action_a, action_b, cb_a, cb_b)
 
         show_status()
         pa2 = state.team_a[state.current_a]
@@ -386,6 +448,25 @@ def _fmt_debuffs(p):
     return ", ".join(parts) if parts else "无"
 
 
+def _fmt_status(p):
+    """格式化状态效果"""
+    parts = []
+    if p.poison_stacks > 0:
+        parts.append(f"中毒:{p.poison_stacks}层")
+    if p.burn_stacks > 0:
+        parts.append(f"燃烧:{p.burn_stacks}层")
+    if p.frostbite_damage > 0:
+        pct = p.frostbite_damage / p.hp * 100 if p.hp > 0 else 0
+        parts.append(f"冻伤:{p.frostbite_damage}({pct:.0f}%)")
+    if p.leech_stacks > 0:
+        parts.append(f"寄生:{p.leech_stacks}层")
+    if p.meteor_countdown > 0:
+        parts.append(f"星陨:{p.meteor_stacks}层({p.meteor_countdown}回合)")
+    if p.charging_skill_idx >= 0:
+        parts.append("蓄力中")
+    return " | ".join(parts) if parts else "状态:无"
+
+
 def _skill_effects(s):
     """简要显示技能效果"""
     parts = []
@@ -397,9 +478,12 @@ def _skill_effects(s):
     if s.burn_stacks > 0: parts.append(f"灼烧{s.burn_stacks}层")
     if s.freeze_stacks > 0: parts.append(f"冻结{s.freeze_stacks}层")
     if s.hit_count > 1: parts.append(f"{s.hit_count}连击")
-    if s.force_switch: parts.append("脱离")
+    if s.force_switch: parts.append("折返")
     if s.agility: parts.append("迅捷")
     if s.charge: parts.append("蓄力")
+    if s.leech_stacks > 0: parts.append(f"寄生{s.leech_stacks}层")
+    if s.meteor_stacks > 0: parts.append(f"星陨{s.meteor_stacks}层")
+    if s.is_mark: parts.append("印记")
     if s.damage_reduction > 0:  # 防御型技能默认有应对
         has_counter = (s.counter_physical_power_mult > 0 or s.counter_physical_drain > 0
                        or s.counter_physical_self_atk != 0 or s.counter_physical_enemy_def != 0
