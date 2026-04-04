@@ -123,7 +123,7 @@ def _apply_debuff(pokemon: "Pokemon", params: Dict) -> None:
 
 
 def _apply_permanent_mod(user: "Pokemon", skill: "Skill", params: Dict) -> None:
-    """应用永久修改（能耗/威力）"""
+    """应用永久修改（能耗/威力）。per_counter 由 execute_counter 单独调用本函数。"""
     target = params.get("target", "")
     delta = params.get("delta", 0)
     trigger = params.get("trigger", "")
@@ -173,7 +173,9 @@ def _h_damage(tag: EffectTag, ctx: Ctx) -> None:
     if power_mult != 1.0:
         power = int(power * power_mult)
     if power > 0 and not ctx.target.is_fainted:
-        dmg = DamageCalculator.calculate(ctx.user, ctx.target, skill, power_override=power)
+        weather = getattr(ctx.state, "weather", None)
+        dmg = DamageCalculator.calculate(ctx.user, ctx.target, skill,
+                                         power_override=power, weather=weather)
         ctx.result["damage"] = ctx.result.get("damage", 0) + dmg
 
 
@@ -363,8 +365,9 @@ def _h_power_dynamic(tag: EffectTag, ctx: Ctx) -> None:
         mult = tag.params.get("multiplier", 1.0)
         from src.battle import DamageCalculator
         new_power = int(ctx.skill.power * mult)
+        weather = getattr(ctx.state, "weather", None)
         ctx.result["final_damage"] = DamageCalculator.calculate(
-            ctx.user, ctx.target, ctx.skill, power_override=new_power
+            ctx.user, ctx.target, ctx.skill, power_override=new_power, weather=weather,
         )
 
 
@@ -401,6 +404,61 @@ def _h_energy_cost_accumulate(tag: EffectTag, ctx: Ctx) -> None:
     ctx.skill.energy_cost += delta
 
 
+def _h_weather(tag: EffectTag, ctx: Ctx) -> None:
+    """设置天气，持续指定回合。params: {"type": "sunny"|"rain"|"sandstorm"|"hail"|"snow", "turns": 8}"""
+    from src.models import Type as TypeEnum
+    weather_type = tag.params.get("type", "sunny")
+    turns = tag.params.get("turns", 5)
+    ctx.state.weather = weather_type
+    ctx.state.weather_turns = turns  # 写入持续回合数
+
+    # 沙暴：地面系技能能耗减半（向下取整）
+    if weather_type == "sandstorm":
+        if not hasattr(ctx.state, "_sandstorm_original_costs"):
+            ctx.state._sandstorm_original_costs = {}
+        for p in ctx.state.team_a + ctx.state.team_b:
+            if p.is_fainted:
+                continue
+            for sk in p.skills:
+                if sk.skill_type == TypeEnum.GROUND:
+                    key = id(sk)
+                    if key not in ctx.state._sandstorm_original_costs:
+                        ctx.state._sandstorm_original_costs[key] = sk.energy_cost
+                    sk.energy_cost = max(1, sk.energy_cost // 2)
+
+
+# ── 注册表 ──
+_WEATHER_DAMAGE_TYPES = {"sandstorm", "hail", "snow"}   # 这些天气在回合结束时触发额外效果
+_WEATHER_IMMUNE_TYPES = {"rock", "ground", "steel"}
+
+
+def _apply_weather_damage(state) -> None:
+    """回合结束时应用天气效果。
+    - 沙暴/冰雹：对非岩/地/钢系造成 1/16 HP 伤害
+    - 雪天：双方获得 2 层冻结
+    """
+    from src.models import Type
+    w = state.weather
+    if not w:
+        return
+    immune = {Type.ROCK, Type.GROUND, Type.STEEL}
+    if w in _WEATHER_DAMAGE_TYPES and w != "snow":
+        dmg_pct = 1 / 16
+        for p in state.team_a:
+            if not p.is_fainted and p.pokemon_type not in immune:
+                p.current_hp = max(1, p.current_hp - int(p.hp * dmg_pct))
+        for p in state.team_b:
+            if not p.is_fainted and p.pokemon_type not in immune:
+                p.current_hp = max(1, p.current_hp - int(p.hp * dmg_pct))
+    if w == "snow":
+        for p in state.team_a:
+            if not p.is_fainted:
+                p.freeze_stacks += 2
+        for p in state.team_b:
+            if not p.is_fainted:
+                p.freeze_stacks += 2
+
+
 def _h_enemy_energy_cost_up(tag: EffectTag, ctx: Ctx) -> None:
     from src.models import SkillCategory as SC
     amount = tag.params.get("amount", 0)
@@ -414,8 +472,8 @@ def _h_enemy_energy_cost_up(tag: EffectTag, ctx: Ctx) -> None:
 
 def _h_mirror_damage(tag: EffectTag, ctx: Ctx) -> None:
     """
-    反弹伤害（听桥）：将攻击方对自己造成的伤害值原样反弹给攻击方。
-    ctx.damage 是攻击方本次攻击造成的伤害值（在 execute_counter 中传入）。
+    反弹伤害（听桥）：将攻击方对自己造成的原始伤害值原样反弹给攻击方。
+    ctx.damage 在 execute_counter 中传入的是减伤前的原始伤害值。
     如果 ctx.damage == 0（对方没有造成伤害，如状态/防御技能），则不反弹。
     """
     mirror_dmg = ctx.damage
@@ -579,6 +637,7 @@ _HANDLERS: Dict[E, Callable] = {
     E.COUNTER_ATTACK:           _h_counter_attack,
     E.COUNTER_STATUS:           _h_counter_status,
     E.COUNTER_DEFENSE:          _h_counter_defense,
+    E.WEATHER:                  _h_weather,
     # ── 特性专用原语 ──
     E.ABILITY_COMPUTE:              _h_ability_compute,
     E.ABILITY_INCREMENT_COUNTER:    _h_ability_increment_counter,

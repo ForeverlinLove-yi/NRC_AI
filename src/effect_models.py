@@ -78,6 +78,7 @@ class E(Enum):
     MIRROR_DAMAGE = auto()           # 反弹伤害 params: {"source":"countered_skill"} 威力=被应对技能
     ENEMY_ENERGY_COST_UP = auto()    # 敌方攻击技能能耗+N  params: {"amount":6,"filter":"attack"}
     COUNTER_OVERRIDE = auto()        # 应对时替换效果 params: {"replace":"poison","from":2,"to":6}
+    WEATHER = auto()                # 设置天气  params: {"type":"sunny"|"rain"|"sandstorm"|"hail","turns":5}
 
     # ── 特性专用原语 ──
     ABILITY_COMPUTE = auto()         # 运行时计算并存入 ability_state

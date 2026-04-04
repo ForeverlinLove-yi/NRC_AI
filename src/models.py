@@ -402,5 +402,7 @@ class BattleState:
             marks_a=dict(self.marks_a), marks_b=dict(self.marks_b),
             counter_count_a=self.counter_count_a,
             counter_count_b=self.counter_count_b,
+            switch_this_turn_a=self.switch_this_turn_a,
+            switch_this_turn_b=self.switch_this_turn_b,
         )
         return bs

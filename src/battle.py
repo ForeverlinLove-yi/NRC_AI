@@ -5,7 +5,7 @@
 import sys
 import os
 import random
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.models import (
@@ -22,9 +22,15 @@ from src.effect_engine import EffectExecutor
 # ============================================================
 class DamageCalculator:
 
+    # 天气修正表: {天气: {技能属性: 威力倍率}}
+    _WEATHER_MULT: Dict[str, Dict[str, float]] = {
+        "sunny":     {"fire": 1.5, "water": 0.5},
+        "rain":      {"water": 1.5, "fire": 0.5},
+    }
+
     @staticmethod
     def calculate(attacker: Pokemon, defender: Pokemon, skill: Skill,
-                  power_override: int = 0) -> int:
+                  power_override: int = 0, weather: str = None) -> int:
         power = power_override or skill.power
         if power <= 0:
             return 0
@@ -48,10 +54,17 @@ class DamageCalculator:
         # 本系加成
         stab = 1.5 if skill.skill_type == attacker.pokemon_type else 1.0
 
+        # 天气修正
+        weather_mult = 1.0
+        if weather:
+            wm = DamageCalculator._WEATHER_MULT.get(weather, {})
+            skill_type_val = skill.skill_type.value if hasattr(skill.skill_type, "value") else str(skill.skill_type)
+            weather_mult = wm.get(skill_type_val, 1.0)
+
         # 连击
         hits = skill.hit_count
 
-        damage = base * eff * stab * hits
+        damage = base * eff * stab * weather_mult * hits
         return max(1, int(damage))
 
 
@@ -213,6 +226,27 @@ def turn_end_effects(state: BattleState) -> None:
         if p.current_hp <= 0:
             p.current_hp = 0
             p.status = StatusType.FAINTED
+
+    # 天气伤害/效果 (沙暴/冰雹每回合对非岩/地/钢系造成1/16 HP伤害；雪天双方获得2层冻结)
+    if state.weather in ("sandstorm", "hail", "snow"):
+        from src.effect_engine import _apply_weather_damage
+        _apply_weather_damage(state)
+
+    # 天气回合递减
+    if state.weather and hasattr(state, "weather_turns") and state.weather_turns > 0:
+        state.weather_turns -= 1
+        if state.weather_turns <= 0:
+            # 沙暴结束：恢复地面系技能原始能耗
+            if state.weather == "sandstorm" and hasattr(state, "_sandstorm_original_costs"):
+                for p in state.team_a + state.team_b:
+                    if p.is_fainted:
+                        continue
+                    for sk in p.skills:
+                        key = id(sk)
+                        if key in state._sandstorm_original_costs:
+                            sk.energy_cost = state._sandstorm_original_costs[key]
+                state._sandstorm_original_costs.clear()
+            state.weather = None
 
     # 减少冷却
     for p in state.team_a + state.team_b:
@@ -416,6 +450,9 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
 
     damage = result["damage"]
 
+    # 保存原始伤害，用于应对反弹（听桥等需要反弹原始伤害而非已减伤值）
+    original_damage = damage
+
     # 先检查敌方技能是否有防御减伤（防御/风墙/听桥/火焰护盾等）
     # damage_reduction 先于应对效果结算
     if enemy_skill and hasattr(enemy_skill, "effects") and enemy_skill.effects:
@@ -432,6 +469,15 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
                 enemy_skill, damage, team,
             )
 
+            if counter_result:  # 应对成功
+                for s in current.skills:
+                    if not getattr(s, "effects", None):
+                        continue
+                    for tag in s.effects:
+                        if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_counter":
+                            from src.effect_engine import _apply_permanent_mod
+                            _apply_permanent_mod(current, s, tag.params)
+
             if counter_result.get("interrupted"):
                 result["interrupted"] = True
 
@@ -442,14 +488,24 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
                 result["force_enemy_switch"] = True
 
     # 对方技能的应对效果（对方防御/状态技能应对我方攻击）
-    # 传入减伤后的 damage 值（听桥需要用实际伤害反弹）
+    # 传入原始伤害（听桥需要反弹原始伤害）
     if enemy_skill and hasattr(enemy_skill, "effects") and enemy_skill.effects:
         for etag in enemy_skill.effects:
             if etag.type in (E.COUNTER_ATTACK, E.COUNTER_STATUS, E.COUNTER_DEFENSE):
                 counter_result = EffectExecutor.execute_counter(
                     state, enemy, current, enemy_skill, etag,
-                    skill, damage, enemy_team,   # 传入已减伤后的 damage
+                    skill, original_damage, enemy_team,   # 传入原始伤害（非已减伤值）
                 )
+
+                if counter_result:  # 应对成功
+                    for s in current.skills:
+                        if not getattr(s, "effects", None):
+                            continue
+                        for tag in s.effects:
+                            if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_counter":
+                                # 能量刃：每应对1次威力永久+N
+                                from src.effect_engine import _apply_permanent_mod
+                                _apply_permanent_mod(current, s, tag.params)
 
                 if counter_result.get("force_enemy_switch"):
                     # 吓退: 强制我方脱离
@@ -565,6 +621,23 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
         if enemy_switched:
             from src.effect_engine import _apply_buff
             _apply_buff(current, cond_buff)
+
+    # 疾风连袭: 重放迅捷技能
+    if result.get("_replay_agility"):
+        EffectExecutor.execute_agility_entry(state, current, enemy, team)
+
+    # 疾风连袭: 将重放的迅捷技能能耗分摊到本技能
+    if result.get("_agility_cost_share"):
+        divisor = result["_agility_cost_share"]
+        for s in current.skills:
+            if s.agility:
+                current.energy += s.energy_cost // divisor
+                break
+
+    # 毒液渗透: 动态能耗减免（每层敌方中毒 -1 能耗）
+    energy_refund = result.get("_energy_refund", 0)
+    if energy_refund > 0:
+        skill.energy_cost = max(0, skill.energy_cost - energy_refund)
 
 
 def _is_first_action(state: BattleState, team: str, action: Action,
