@@ -858,6 +858,9 @@ async def receive_player_action(ws: WebSocket, msg: dict):
 
     # ── 执行回合 ──
     snap_before = _snapshot(state)
+    # 清除上回合的聚能日志
+    if hasattr(state, "_energy_recharge_log"):
+        state._energy_recharge_log.clear()
     try:
         execute_full_turn(state, action_a, action_b, _ai_switch_callback, _ai_switch_callback)
     except Exception as e:
@@ -871,6 +874,14 @@ async def receive_player_action(ws: WebSocket, msg: dict):
         await ws.send_text(json.dumps({"type": "your_turn", "turn": state.turn}))
         return
     snap_after  = _snapshot(state)
+
+    # ── 聚能提示 ──
+    for ev in getattr(state, "_energy_recharge_log", []):
+        side_str = "🧑 你" if ev["team"] == "a" else "🤖 AI"
+        session.add_log(
+            f"  ⚡ {side_str}方 {ev['pokemon']} 能量不足（需{ev['needed']}，有{ev['had']}），"
+            f"自动聚能+5，{ev['skill']}未能释放"
+        )
 
     # ── 湿润印记触发提示（在执行前检测到的印记已在execute_full_turn开头消耗） ──
     if moisture_a > 0:

@@ -236,7 +236,13 @@ def _check_skill_filter(filt: Dict, ctx: Ctx) -> bool:
             return False
 
     if filt.get("on_kill"):
-        if not ctx.target.is_fainted:
+        # is_fainted 在 battle.py 扣血后设置
+        # 在 execute_skill 内部，用 damage 是否能击杀来判断
+        damage_dealt = ctx.result.get("damage", 0)
+        target_dead = ctx.target.is_fainted or (
+            damage_dealt > 0 and ctx.target.current_hp <= damage_dealt
+        )
+        if not target_dead:
             return False
 
     if filt.get("energy_zero_after"):

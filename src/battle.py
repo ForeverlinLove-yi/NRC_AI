@@ -786,6 +786,13 @@ def _execute_with_counter(state: BattleState, team: str, action: Action,
 
     if current.energy < actual_cost:
         current.gain_energy(5)
+        # 记录聚能事件，供 server.py 日志展示
+        if not hasattr(state, "_energy_recharge_log"):
+            state._energy_recharge_log = []
+        state._energy_recharge_log.append({
+            "team": team, "pokemon": current.name,
+            "skill": skill.name, "needed": actual_cost, "had": current.energy - 5,
+        })
         return
     current.energy -= actual_cost
 
