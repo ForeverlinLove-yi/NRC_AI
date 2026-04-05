@@ -973,16 +973,25 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
         current.current_hp = 0
         current.status = StatusType.FAINTED
 
-    # 脱离
+    # 脱离（泡沫幻影应对成功等触发的主动脱离）
+    # 记录到 state 供 server.py 检查，让玩家手动选择换上哪只（不随机）
     if result.get("force_switch"):
         alive = [i for i, p in enumerate(team_list) if not p.is_fainted and i != idx]
         if alive:
             current.on_switch_out()
-            new_idx = random.choice(alive)
+            # 存储待处理的换人请求，server.py 负责让玩家选择
+            if not hasattr(state, "_pending_switch_requests"):
+                state._pending_switch_requests = []
+            state._pending_switch_requests.append({
+                "team": team,
+                "reason": "force_switch",  # 主动脱离
+                "alive": alive,
+            })
+            # 临时用第一个存活精灵占位，等玩家选择后更新
             if team == "a":
-                state.current_a = new_idx
+                state.current_a = alive[0]
             else:
-                state.current_b = new_idx
+                state.current_b = alive[0]
     elif current.ability_state.pop("force_switch_after_action", None):
         alive = [i for i, p in enumerate(team_list) if not p.is_fainted and i != idx]
         if alive:

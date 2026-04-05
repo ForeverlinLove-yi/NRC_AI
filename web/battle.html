@@ -469,7 +469,11 @@ function renderState(s){
   document.getElementById('turn-info').textContent=`回合 ${s.turn}`;
   renderStrip('strip-a',s.team_a,s.current_a);
   renderStrip('strip-b',s.team_b,s.current_b);
-  if(s.waiting_for_player && !s.game_over){
+  if(s.force_switch_prompt && !s.game_over){
+    // 泡沫幻影等应对后强制换人：只展示换人面板，隐藏技能
+    renderSkills(null, null); // 清空技能区
+    renderForceSwitchPanel(s.team_a, s.current_a, pb);
+  } else if(s.waiting_for_player && !s.game_over){
     renderSkills(pa, pb);
     renderSwitchPanel(s.team_a, s.current_a, pb);
   }
@@ -645,6 +649,50 @@ function renderSwitchPanel(teamA, curIdx, enemyPoke){
   back.textContent='← 返回技能';
   back.onclick=()=>{ showSwitch=false; panel.classList.remove('open'); };
   panel.appendChild(back);
+}
+
+// ══════════════════════════════
+// 强制换人面板（应对脱离，无返回按钮）
+// ══════════════════════════════
+function renderForceSwitchPanel(teamA, curIdx, enemyPoke){
+  // 隐藏技能区，强制展示换人
+  document.getElementById('switch-panel').classList.add('open');
+  const panel=document.getElementById('switch-panel');
+  panel.innerHTML='';
+
+  const title=document.createElement('div');
+  title.style.cssText='color:var(--yellow);font-weight:700;padding:6px 4px;font-size:12px';
+  title.textContent='🔄 应对成功！选择换上的精灵（不占回合）';
+  panel.appendChild(title);
+
+  teamA.forEach((p,i)=>{
+    if(i===curIdx || p.is_fainted) return;
+    const card=document.createElement('button');
+    card.className='sw-card';
+    const tc=TYPE_CLASS[p.type]||'';
+    const pct=p.hp>0?(p.current_hp/p.hp*100).toFixed(0):0;
+    const adv = p.type_advantage || 1.0;
+    let advHtml='';
+    if(adv>=2.0)      advHtml=`<span class="adv-badge adv-super">克制×${adv}</span>`;
+    else if(adv<=0.5) advHtml=`<span class="adv-badge adv-weak">被克×${adv}</span>`;
+    else              advHtml=`<span class="adv-badge adv-norm">普通</span>`;
+    card.innerHTML=`
+      <span class="sw-icon">${emoji(p.name)}</span>
+      <div class="sw-info">
+        <div class="sw-name">${p.name}</div>
+        <div class="sw-hp">HP ${p.current_hp}/${p.hp}(${pct}%) E=${p.energy}</div>
+      </div>
+      <span class="type-badge ${tc}" style="font-size:8px">${TYPE_ZH[p.type]||p.type}</span>
+      ${advHtml}`;
+    card.onclick=()=>doForceSwitch(i);
+    panel.appendChild(card);
+  });
+}
+
+function doForceSwitch(idx){
+  enableActions(false);
+  setWait(true,'换人中…');
+  send({type:'switch', index:idx});
 }
 
 // ══════════════════════════════
