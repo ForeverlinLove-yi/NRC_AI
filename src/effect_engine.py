@@ -165,6 +165,25 @@ def _adjust_cost_delta(pokemon: "Pokemon", delta: int) -> int:
     return -delta if pokemon.ability_state.get("cost_invert") else delta
 
 
+def _check_runtime_condition(tag: EffectTag, ctx: Ctx) -> bool:
+    condition = tag.params.get("condition", "")
+    if not condition:
+        return True
+    if condition == "after_use_hp_gt_half":
+        return ctx.user.current_hp > ctx.user.hp / 2
+    if condition in ("self_hp_above", "self_hp_below"):
+        threshold = float(tag.params.get("threshold", 0.5))
+        ratio = ctx.user.current_hp / max(1, ctx.user.hp)
+        return ratio > threshold if condition == "self_hp_above" else ratio < threshold
+    if condition in ("enemy_hp_above", "enemy_hp_below"):
+        threshold = float(tag.params.get("threshold", 0.5))
+        ratio = ctx.target.current_hp / max(1, ctx.target.hp)
+        return ratio > threshold if condition == "enemy_hp_above" else ratio < threshold
+    if condition == "enemy_switch":
+        return bool(ctx.state.switch_this_turn_b if ctx.team == "a" else ctx.state.switch_this_turn_a)
+    return True
+
+
 def _apply_permanent_mod(user: "Pokemon", skill: "Skill", params: Dict,
                          force: bool = False) -> None:
     """应用永久修改（能耗/威力）。
@@ -175,13 +194,15 @@ def _apply_permanent_mod(user: "Pokemon", skill: "Skill", params: Dict,
     trigger = params.get("trigger", "")
 
     # 非 force 模式下，跳过需要由外部手动触发的类型
-    if not force and trigger in ("per_position_change", "per_counter"):
+    if not force and trigger in ("per_position_change", "per_counter", "per_use"):
         return
 
     if target == "cost":
         skill.energy_cost = max(0, skill.energy_cost + _adjust_cost_delta(user, delta))
     elif target == "power":
         skill.power = max(0, skill.power + delta)
+    elif target == "hit_count":
+        skill.hit_count = max(1, skill.hit_count + int(delta))
 
 
 def _execute_agility_old(pokemon: "Pokemon", enemy: "Pokemon", skill: "Skill") -> None:
@@ -230,7 +251,13 @@ def _h_damage(tag: EffectTag, ctx: Ctx) -> None:
         power = int(power * power_mult)
     if power > 0 and not ctx.target.is_fainted:
         weather = getattr(ctx.state, "weather", None)
-        hit_count = max(1, skill.hit_count + ctx.user.hit_count_mod)
+        hit_count = max(
+            1,
+            int(
+                (skill.hit_count + ctx.user.hit_count_mod + ctx.result.get("_hit_count_bonus", 0))
+                * ctx.result.get("_hit_count_mult", 1.0)
+            ),
+        )
         dmg = DamageCalculator.calculate(ctx.user, ctx.target, skill,
                                          power_override=power, weather=weather,
                                          hit_count_override=hit_count)
@@ -240,10 +267,20 @@ def _h_damage(tag: EffectTag, ctx: Ctx) -> None:
 
 
 def _h_self_buff(tag: EffectTag, ctx: Ctx) -> None:
+    if not _check_runtime_condition(tag, ctx):
+        return
     _apply_buff(ctx.user, tag.params)
 
 
+def _h_self_debuff(tag: EffectTag, ctx: Ctx) -> None:
+    if not _check_runtime_condition(tag, ctx):
+        return
+    _apply_debuff(ctx.user, tag.params)
+
+
 def _h_enemy_debuff(tag: EffectTag, ctx: Ctx) -> None:
+    if not _check_runtime_condition(tag, ctx):
+        return
     if tag.params.get("invert"):
         _apply_buff(ctx.target, {k: abs(v) for k, v in tag.params.items() if k != "invert"})
     else:
@@ -260,6 +297,14 @@ def _h_heal_energy(tag: EffectTag, ctx: Ctx) -> None:
     ctx.user.gain_energy(tag.params.get("amount", 1))
 
 
+def _h_self_ko(tag: EffectTag, ctx: Ctx) -> None:
+    ctx.result["_self_ko"] = True
+
+
+def _h_reset_skill_cost(tag: EffectTag, ctx: Ctx) -> None:
+    ctx.skill.energy_cost = getattr(ctx.skill, "_base_energy_cost", ctx.skill.energy_cost)
+
+
 def _h_steal_energy(tag: EffectTag, ctx: Ctx) -> None:
     amt = tag.params.get("amount", 1)
     ctx.user.gain_energy(amt)
@@ -274,6 +319,8 @@ def _h_enemy_lose_energy(tag: EffectTag, ctx: Ctx) -> None:
             ctx.state.mp_a -= tag.params.get("amount", 1)
         else:
             ctx.state.mp_b -= tag.params.get("amount", 1)
+    elif tgt in ("enemy_new", "enemy"):
+        ctx.target.energy = max(0, ctx.target.energy - tag.params.get("amount", 1))
     else:
         ctx.target.energy = max(0, ctx.target.energy - tag.params.get("amount", 1))
 
@@ -398,6 +445,25 @@ def _h_conditional_buff(tag: EffectTag, ctx: Ctx) -> None:
     buff = tag.params.get("buff", {})
     if condition == "enemy_switch":
         ctx.result["_conditional_enemy_switch_buff"] = buff
+    elif condition == "after_use_hp_gt_half":
+        if ctx.user.current_hp > ctx.user.hp / 2:
+            ctx.result.setdefault("_post_use_self_buffs", []).append(buff)
+    elif condition in ("self_hp_gt", "self_hp_lt", "enemy_hp_gt", "enemy_hp_lt"):
+        threshold = float(tag.params.get("threshold", 0))
+        source = ctx.user if condition.startswith("self") else ctx.target
+        ratio = source.current_hp / max(1, source.hp)
+        matched = ratio > threshold if condition.endswith("_gt") else ratio < threshold
+        if matched:
+            target = ctx.user if tag.params.get("target", "self") == "self" else ctx.target
+            _apply_buff(target, buff)
+    elif condition in ("self_hp_above", "self_hp_below"):
+        threshold = float(tag.params.get("threshold", 0.5))
+        start_hp = ctx.result.get("_user_hp_start", ctx.user.current_hp)
+        ratio = start_hp / max(1, ctx.user.hp)
+        matched = ratio > threshold if condition == "self_hp_above" else ratio < threshold
+        if matched:
+            target = ctx.user if tag.params.get("target", "self") == "self" else ctx.target
+            _apply_buff(target, buff)
     elif condition == "per_enemy_poison":
         stacks = ctx.target.poison_stacks
         if stacks > 0:
@@ -418,6 +484,43 @@ def _h_power_dynamic(tag: EffectTag, ctx: Ctx) -> None:
     if condition == "first_strike" and ctx.is_first:
         bonus_pct = tag.params.get("bonus_pct", 0)
         ctx.result["_power_mult"] = ctx.result.get("_power_mult", 1.0) + bonus_pct
+    elif condition == "enemy_switch":
+        enemy_switched = (
+            ctx.state.switch_this_turn_b if ctx.team == "a" else ctx.state.switch_this_turn_a
+        )
+        if enemy_switched:
+            ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + tag.params.get("bonus", 0)
+    elif condition == "prev_status":
+        if ctx.user.ability_state.get("last_skill_category") == "状态" and ctx.user.ability_state.get("last_skill_turn") == ctx.state.turn - 1:
+            ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + tag.params.get("bonus", 0)
+    elif condition == "prev_counter_success":
+        if ctx.user.ability_state.get("last_counter_success_turn") == ctx.state.turn - 1:
+            ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + tag.params.get("bonus", 0)
+    elif condition == "energy_zero_after_use":
+        if ctx.user.energy == 0:
+            ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + tag.params.get("bonus", 0)
+    elif condition == "enemy_energy_leq":
+        threshold = tag.params.get("threshold", 0)
+        if ctx.target.energy <= threshold:
+            if "multiplier" in tag.params:
+                mult = tag.params.get("multiplier", 1.0)
+                ctx.result["_power_mult"] = ctx.result.get("_power_mult", 1.0) * mult
+            else:
+                ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + tag.params.get("bonus", 0)
+    elif condition == "self_missing_hp_step":
+        step_pct = float(tag.params.get("step_pct", 0.05))
+        bonus_per_step = int(tag.params.get("bonus_per_step", 0))
+        if step_pct > 0 and bonus_per_step:
+            missing_pct = max(0.0, 1.0 - (ctx.user.current_hp / max(1, ctx.user.hp)))
+            steps = int(missing_pct / step_pct)
+            if steps > 0:
+                ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + steps * bonus_per_step
+    elif condition == "energy_cost_above_base":
+        base_cost = int(tag.params.get("base_cost", ctx.skill.energy_cost))
+        bonus_per_step = int(tag.params.get("bonus_per_step", 0))
+        steps = max(0, ctx.skill.energy_cost - base_cost)
+        if steps > 0 and bonus_per_step:
+            ctx.result["_power_bonus"] = ctx.result.get("_power_bonus", 0) + steps * bonus_per_step
     elif condition == "per_poison":
         stacks = ctx.target.poison_stacks
         bonus = tag.params.get("bonus_per_stack", 0) * stacks
@@ -432,15 +535,30 @@ def _h_power_dynamic(tag: EffectTag, ctx: Ctx) -> None:
             ctx.user, ctx.target, ctx.skill, power_override=new_power, weather=weather,
         )
 
-
 def _h_permanent_mod(tag: EffectTag, ctx: Ctx) -> None:
     _apply_permanent_mod(ctx.user, ctx.skill, tag.params)
 
 
 def _h_skill_mod(tag: EffectTag, ctx: Ctx) -> None:
+    if not _check_runtime_condition(tag, ctx):
+        return
     target = ctx.user if tag.params.get("target", "self") == "self" else ctx.target
     stat = tag.params.get("stat", "")
     value = tag.params.get("value", 0)
+    condition = tag.params.get("condition", "")
+    if condition == "enemy_switch":
+        enemy_switched = (
+            ctx.state.switch_this_turn_b if ctx.team == "a" else ctx.state.switch_this_turn_a
+        )
+        if not enemy_switched:
+            return
+    elif condition in ("self_hp_above", "self_hp_below"):
+        threshold = float(tag.params.get("threshold", 0.5))
+        start_hp = ctx.result.get("_user_hp_start", ctx.user.current_hp)
+        ratio = start_hp / max(1, ctx.user.hp)
+        matched = ratio > threshold if condition == "self_hp_above" else ratio < threshold
+        if not matched:
+            return
     if stat == "power":
         target.skill_power_bonus += int(value)
     elif stat == "power_pct":
@@ -449,6 +567,10 @@ def _h_skill_mod(tag: EffectTag, ctx: Ctx) -> None:
         target.skill_cost_mod += _adjust_cost_delta(target, int(value))
     elif stat == "hit_count":
         target.hit_count_mod += int(value)
+    elif stat == "current_hit_count":
+        ctx.result["_hit_count_bonus"] = ctx.result.get("_hit_count_bonus", 0) + int(value)
+    elif stat == "current_hit_count_mult":
+        ctx.result["_hit_count_mult"] = ctx.result.get("_hit_count_mult", 1.0) * float(value)
     elif stat == "priority":
         target.priority_stage += int(value)
 
@@ -486,7 +608,22 @@ def _h_position_buff(tag: EffectTag, ctx: Ctx) -> None:
 
 
 def _h_drive(tag: EffectTag, ctx: Ctx) -> None:
-    ctx.result["_drive_value"] = tag.params.get("value", 1)
+    value = tag.params.get("value", 1)
+    ability_filter = ctx.result.get("_ability_filter", {}) if isinstance(ctx.result, dict) else {}
+    positions = ability_filter.get("positions", [])
+
+    # 位置型特性：把“传动”转成对应技能本体上的 DRIVE 标签，避免每回合重复叠加。
+    if ctx.skill is None and positions:
+        for idx, skill in enumerate(ctx.user.skills):
+            if idx not in positions:
+                continue
+            if not getattr(skill, "effects", None):
+                skill.effects = []
+            if not any(tag.type == E.DRIVE and tag.params.get("value", 1) == value for tag in skill.effects):
+                skill.effects.append(EffectTag(E.DRIVE, {"value": value}))
+        return
+
+    ctx.result["_drive_value"] = value
 
 
 def _h_passive_energy_reduce(tag: EffectTag, ctx: Ctx) -> None:
@@ -565,6 +702,21 @@ def _h_enemy_energy_cost_up(tag: EffectTag, ctx: Ctx) -> None:
     from src.models import SkillCategory as SC
     amount = tag.params.get("amount", 0)
     filt = tag.params.get("filter", "all")
+    duration = tag.params.get("duration", 0)
+
+    # Timed cost modifiers are stored on the target and consumed by battle.py
+    # when that target actually spends energy on a later turn.
+    if duration:
+        mod = {
+            "amount": int(amount),
+            "filter": filt,
+            "turns": int(duration),
+        }
+        if filt in ("used_skill", "other_skills") and ctx.enemy_skill is not None:
+            mod["skill_name"] = ctx.enemy_skill.name
+        ctx.target.ability_state.setdefault("temporary_skill_cost_mods", []).append(mod)
+        return
+
     for s in ctx.target.skills:
         if filt == "attack" and s.category in (SC.PHYSICAL, SC.MAGICAL):
             s.energy_cost = max(0, s.energy_cost + _adjust_cost_delta(ctx.target, amount))
@@ -608,6 +760,9 @@ def _h_passive_energy_reduce_water_ring(tag: EffectTag, ctx: Ctx) -> None:
 def _h_permanent_mod_ability(tag: EffectTag, ctx: Ctx) -> None:
     """特性中的永久修改（身经百练）"""
     per_counter = tag.params.get("per_counter", 0)
+    ability_filter = ctx.result.get("_ability_filter", {}) if isinstance(ctx.result, dict) else {}
+    positions = ability_filter.get("positions", [])
+
     if per_counter > 0:
         counter_count = getattr(
             ctx.state,
@@ -619,12 +774,33 @@ def _h_permanent_mod_ability(tag: EffectTag, ctx: Ctx) -> None:
         elements = skill_filter.get("element", [])
         from src.skill_db import _TYPE_MAP
         for s in ctx.user.skills:
+            if positions and _find_skill_index(ctx.user, s) not in positions:
+                continue
             if elements:
                 type_matched = any(_TYPE_MAP.get(el) == s.skill_type for el in elements)
-                if type_matched:
-                    s.power = int(s.power * (1.0 + bonus_pct))
+                if not type_matched:
+                    continue
+            base_power = getattr(s, "_ability_base_power", s.power)
+            setattr(s, "_ability_base_power", base_power)
+            s.power = int(base_power * (1.0 + bonus_pct))
     else:
-        _apply_permanent_mod(ctx.user, ctx.skill, tag.params)
+        if ctx.skill is not None:
+            _apply_permanent_mod(ctx.user, ctx.skill, tag.params)
+            return
+
+        if positions:
+            for idx, s in enumerate(ctx.user.skills):
+                if idx not in positions:
+                    continue
+                if tag.params.get("target") == "power":
+                    base_power = getattr(s, "_ability_base_power", s.power)
+                    setattr(s, "_ability_base_power", base_power)
+                    s.power = max(0, base_power + int(tag.params.get("delta", 0)))
+                else:
+                    _apply_permanent_mod(ctx.user, s, tag.params)
+        else:
+            for s in ctx.user.skills:
+                _apply_permanent_mod(ctx.user, s, tag.params)
 
 
 # ── 应对容器 handler（仅收集，实际由 execute_counter 触发）──
@@ -654,6 +830,9 @@ def _h_ability_compute(tag: EffectTag, ctx: Ctx) -> None:
             pokemon.ability_state = {}
         pokemon.ability_state["poison_skill_count"] = count
 
+    elif action == "modify_matching_skills":
+        _apply_matching_skill_mods(pokemon, ctx.target, tag.params)
+
     elif action == "shared_wing_skills":
         from src.models import Type
         team_list = ctx.state.team_a if ctx.team == "a" else ctx.state.team_b
@@ -680,6 +859,85 @@ def _h_ability_increment_counter(tag: EffectTag, ctx: Ctx) -> None:
         ctx.state.counter_count_a += 1
     else:
         ctx.state.counter_count_b += 1
+
+
+def _skill_matches_ability_filter(skill: "Skill", params: Dict) -> bool:
+    """判断技能是否匹配特性筛选条件。"""
+    from src.models import SkillCategory
+    from src.skill_db import _TYPE_MAP
+
+    elements = params.get("element")
+    if elements:
+        if not isinstance(elements, (list, tuple, set)):
+            elements = [elements]
+        expected = {_TYPE_MAP.get(el) for el in elements}
+        if skill.skill_type not in expected:
+            return False
+
+    category = params.get("category", "")
+    if category == "attack" and skill.category not in (SkillCategory.PHYSICAL, SkillCategory.MAGICAL):
+        return False
+    if category == "defense" and skill.category != SkillCategory.DEFENSE:
+        return False
+    if category == "status" and skill.category != SkillCategory.STATUS:
+        return False
+
+    if params.get("attack_only") and skill.power <= 0:
+        return False
+
+    if params.get("pure_attack"):
+        if skill.power <= 0:
+            return False
+        if not skill.effects or len(skill.effects) != 1 or skill.effects[0].type != E.DAMAGE:
+            return False
+
+    if "energy_cost_gt" in params and skill.energy_cost <= params["energy_cost_gt"]:
+        return False
+    if "energy_cost_ge" in params and skill.energy_cost < params["energy_cost_ge"]:
+        return False
+    if "energy_cost_lt" in params and skill.energy_cost >= params["energy_cost_lt"]:
+        return False
+    if "energy_cost_le" in params and skill.energy_cost > params["energy_cost_le"]:
+        return False
+    if "energy_cost_eq" in params and skill.energy_cost != params["energy_cost_eq"]:
+        return False
+
+    return True
+
+
+def _apply_matching_skill_mods(pokemon: "Pokemon", enemy: "Pokemon", params: Dict) -> None:
+    """对匹配的携带技能应用持久修改。"""
+    count_source = params.get("count_source", "")
+    count = 1
+    if count_source == "self_element":
+        from src.skill_db import _TYPE_MAP
+        elements = params.get("count_element", params.get("element", []))
+        if not isinstance(elements, (list, tuple, set)):
+            elements = [elements]
+        count_types = {_TYPE_MAP.get(el) for el in elements}
+        count = sum(1 for s in pokemon.skills if s.skill_type in count_types)
+    elif count_source == "enemy_energy_sum":
+        count = sum(max(0, s.energy_cost) for s in enemy.skills)
+
+    power_pct = float(params.get("power_pct", 0.0)) * count
+    power_bonus = int(params.get("power_bonus", 0)) * count
+    hit_count_bonus = int(params.get("hit_count_bonus", 0)) * count
+    grant_agility = bool(params.get("grant_agility", False))
+
+    for s in pokemon.skills:
+        if not _skill_matches_ability_filter(s, params):
+            continue
+
+        if power_pct or power_bonus:
+            base_power = getattr(s, "_ability_base_power", s.power)
+            setattr(s, "_ability_base_power", base_power)
+            s.power = max(0, int(base_power * (1.0 + power_pct)) + power_bonus)
+
+        if hit_count_bonus:
+            s.hit_count = max(1, s.hit_count + hit_count_bonus)
+
+        if grant_agility:
+            s.agility = True
 
 
 def _h_transfer_mods(tag: EffectTag, ctx: Ctx) -> None:
@@ -780,9 +1038,12 @@ def _h_cost_invert(tag: EffectTag, ctx: Ctx) -> None:
 _HANDLERS: Dict[E, Callable] = {
     E.DAMAGE:                   _h_damage,
     E.SELF_BUFF:                _h_self_buff,
+    E.SELF_DEBUFF:              _h_self_debuff,
     E.ENEMY_DEBUFF:             _h_enemy_debuff,
     E.HEAL_HP:                  _h_heal_hp,
     E.HEAL_ENERGY:              _h_heal_energy,
+    E.SELF_KO:                  _h_self_ko,
+    E.RESET_SKILL_COST:         _h_reset_skill_cost,
     E.STEAL_ENERGY:             _h_steal_energy,
     E.ENEMY_LOSE_ENERGY:        _h_enemy_lose_energy,
     E.LIFE_DRAIN:               _h_life_drain,
@@ -901,17 +1162,33 @@ class EffectExecutor:
             "force_switch": False,
             "force_enemy_switch": False,
             "counter_effects": [],
+            "_user_hp_start": user.current_hp,
+            "_target_hp_start": target.current_hp,
         }
         ctx = Ctx(
             state=state, user=user, target=target, skill=skill,
             result=result, is_first=is_first, team=team, enemy_skill=enemy_skill,
         )
+        damage_tags: List[EffectTag] = []
+        post_use_tags: List[EffectTag] = []
         for tag in effects:
+            if tag.params.get("when") == "post_use":
+                post_use_tags.append(tag)
+                continue
+            if tag.type == E.DAMAGE:
+                damage_tags.append(tag)
+                continue
+            _apply_tag(tag, ctx)
+        for tag in damage_tags:
             _apply_tag(tag, ctx)
         total_drain = result.get("_life_drain_pct", 0.0) + getattr(user, "life_drain_mod", 0.0)
         if total_drain > 0 and result.get("damage", 0) > 0:
             heal = int(result["damage"] * total_drain)
             user.current_hp = min(user.hp, user.current_hp + heal)
+        for tag in post_use_tags:
+            _apply_tag(tag, ctx)
+        for buff in result.pop("_post_use_self_buffs", []):
+            _apply_buff(user, buff)
         if result.get("_consume_next_attack_mod"):
             user.next_attack_power_bonus = 0
             user.next_attack_power_pct = 0.0
@@ -931,7 +1208,7 @@ class EffectExecutor:
         enemy_skill: "Skill",
         damage: int,
         team: str = "a",
-    ) -> Dict:
+    ) -> Optional[Dict]:
         """
         执行应对效果。子效果复用同一套 _apply_tag，无重复逻辑。
         """
@@ -954,7 +1231,7 @@ class EffectExecutor:
             matched = enemy_skill.category == SkillCategory.DEFENSE
 
         if not matched:
-            return result
+            return None
 
         # 应对成功：更新计数
         if team == "a":
@@ -980,6 +1257,39 @@ class EffectExecutor:
             else:
                 _apply_tag(sub, ctx)
 
+        if any(key in result for key in ("_power_bonus", "_power_mult", "_hit_count_bonus", "_hit_count_mult")):
+            from src.battle import DamageCalculator
+            weather = getattr(state, "weather", None)
+            power = (
+                skill.power
+                + user.skill_power_bonus
+                + user.next_attack_power_bonus
+                + result.get("_power_bonus", 0)
+            )
+            power_mult = (
+                1.0
+                + user.skill_power_pct_mod
+                + user.next_attack_power_pct
+                + (result.get("_power_mult", 1.0) - 1.0)
+            )
+            if power_mult != 1.0:
+                power = int(power * power_mult)
+            hit_count = max(
+                1,
+                int(
+                    (skill.hit_count + user.hit_count_mod + result.get("_hit_count_bonus", 0))
+                    * result.get("_hit_count_mult", 1.0)
+                ),
+            )
+            result["final_damage"] = DamageCalculator.calculate(
+                user,
+                target,
+                skill,
+                power_override=power,
+                weather=weather,
+                hit_count_override=hit_count,
+            )
+
         return result
 
     # ────────────────────────────────────────
@@ -1004,6 +1314,7 @@ class EffectExecutor:
             if ae.timing != timing:
                 continue
 
+            context["_ability_filter"] = ae.filter
             if not EffectExecutor._check_ability_filter(ae, pokemon, enemy, state, team, context):
                 continue
 
@@ -1119,12 +1430,14 @@ class EffectExecutor:
 
         if "element" in f:
             skill = context.get("skill")
-            if skill:
-                from src.skill_db import _TYPE_MAP
-                expected_type = _TYPE_MAP.get(f["element"])
-                if expected_type and skill.skill_type != expected_type:
-                    return False
-            else:
+            if not skill:
+                return False
+            from src.skill_db import _TYPE_MAP
+            elements = f["element"]
+            if not isinstance(elements, (list, tuple, set)):
+                elements = [elements]
+            expected_types = {_TYPE_MAP.get(el) for el in elements}
+            if skill.skill_type not in expected_types:
                 return False
 
         if f.get("condition") == "skill_element_not_enemy_type":
@@ -1133,6 +1446,12 @@ class EffectExecutor:
                 return True
             return False
 
+        if f.get("condition") == "energy_zero":
+            return pokemon.energy <= 0
+
+        if f.get("condition") == "energy_not_zero":
+            return pokemon.energy > 0
+
         if "positions" in f:
             skill = context.get("skill")
             if skill:
@@ -1140,7 +1459,9 @@ class EffectExecutor:
                 if idx not in f["positions"]:
                     return False
             else:
-                return False
+                # 位置型被动特性会在没有具体 skill 的时机触发，
+                # 由 handler 依据 filter 自行选择目标技能。
+                pass
 
         return True
 

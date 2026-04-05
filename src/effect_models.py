@@ -27,6 +27,7 @@ class E(Enum):
     # ── 属性修改 ──
     SELF_BUFF = auto()               # 自身增益  params: {"atk":1.0, "spatk":0.7, "speed":80}
                                      #   百分比用小数(1.0=+100%), 速度用整数(+80=speed_mod)
+    SELF_DEBUFF = auto()             # 自身减益  params 同上, 值为正数(自动转为 down)
     ENEMY_DEBUFF = auto()            # 敌方减益  params 同上, 值为正数(自动取反)
 
     # ── 状态附加 ──
@@ -58,6 +59,8 @@ class E(Enum):
     SKILL_MOD = auto()               # 技能维度修正 params: {"target":"self","stat":"power_pct","value":0.4}
     NEXT_ATTACK_MOD = auto()         # 下一次攻击修正 params: {"power_bonus":70} / {"power_pct":1.0}
     CLEANSE = auto()                 # 清除增减益/状态 params: {"target":"self","mode":"buffs|debuffs|all"}
+    SELF_KO = auto()                 # 结算后自身力竭 params: {}
+    RESET_SKILL_COST = auto()        # 技能能耗重置为基础值 params: {}
 
     # ── 位置 / 传动 ──
     POSITION_BUFF = auto()           # 位置增益  params: {"positions":[0,2],"buff":{"atk":1.0}}

@@ -170,6 +170,41 @@ def _add_unique(tags: List[str], tag: str) -> None:
         tags.append(tag)
 
 
+def _tag_signature(tag: str) -> str:
+    """返回一个用于去重的粗粒度语义签名。"""
+    compact = tag.replace(" ", "")
+
+    if "E.WEATHER" in compact:
+        weather = None
+        m = re.search(r'(?:type[:=]\s*|\"type\":\s*|\{[^\}]*\"type\":\s*)[\'"]?([a-z]+)[\'"]?', compact)
+        if m:
+            weather = m.group(1)
+        turns = None
+        m = re.search(r"turns=(\d+)", compact)
+        if m:
+            turns = m.group(1)
+        return f"weather:{weather}:{turns}"
+
+    if "E.ENEMY_ENERGY_COST_UP" in compact:
+        m = re.search(r"amount=(\d+)", compact)
+        m_filter = re.search(r"filter='([^']+)'", compact)
+        m_duration = re.search(r"duration=(\d+)", compact)
+        return (
+            f"skill_cost_mod:enemy:{m.group(1) if m else None}:"
+            f"{m_filter.group(1) if m_filter else 'all'}:"
+            f"{m_duration.group(1) if m_duration else 0}"
+        )
+
+    if "E.SKILL_MOD" in compact and "stat='cost'" in compact:
+        m_target = re.search(r"target='([^']+)'", compact)
+        m_value = re.search(r"value=(-?\d+)", compact)
+        target = m_target.group(1) if m_target else None
+        value = m_value.group(1) if m_value else None
+        return f"skill_cost_mod:{target}:{value}"
+
+    return compact
+
+
 def _set_skill_field(skill: Skill, field: str, value: float | int) -> None:
     current = getattr(skill, field)
     if field in _FLOAT_SKILL_FIELDS:
@@ -201,8 +236,15 @@ def _extract_counter_clauses(raw_desc: str) -> List[tuple[str, str]]:
     return clauses
 
 
+def _strip_counter_clauses(raw_desc: str) -> str:
+    text = raw_desc or ""
+    pattern = re.compile(r"(应对攻击|应对状态|应对防御)[:：]")
+    match = pattern.search(text)
+    return text[:match.start()] if match else text
+
+
 def _parse_basic_skill_fields(skill: Skill, raw_desc: str) -> None:
-    desc = _normalize_desc(raw_desc)
+    desc = _normalize_desc(_strip_counter_clauses(raw_desc))
     if not desc:
         return
 
@@ -254,6 +296,9 @@ def _parse_basic_skill_fields(skill: Skill, raw_desc: str) -> None:
         skill.agility = True
     if "蓄力" in desc:
         skill.charge = True
+    match = re.search(r"先手([+-]\d+)", desc)
+    if match:
+        skill.priority_mod = int(match.group(1))
 
     for status_name, field in (
         ("中毒", "poison_stacks"),
@@ -328,7 +373,7 @@ def _parse_basic_skill_fields(skill: Skill, raw_desc: str) -> None:
         skill.enemy_energy_cost_up = max(skill.enemy_energy_cost_up, int(match.group(1)))
 
 
-def _parse_counter_clause_effects(clause: str) -> List[str]:
+def _parse_counter_clause_effects(skill: Skill, clause: str) -> List[str]:
     desc = _normalize_desc(clause)
     tags: List[str] = []
 
@@ -359,11 +404,149 @@ def _parse_counter_clause_effects(clause: str) -> List[str]:
     if match:
         _add_unique(tags, _fmt_T("E.SKILL_MOD", target="enemy", stat="priority", value=-int(match.group(1))))
 
+    for cn_name, field in (
+        ("物攻", "atk"),
+        ("物防", "def"),
+        ("魔攻", "spatk"),
+        ("魔防", "spdef"),
+        ("速度", "speed"),
+    ):
+        for pattern in (
+            rf"(?:自己|自身)?获得{cn_name}\+(\d+)%",
+            rf"提升(?:自己|自身)?(\d+)%{cn_name}",
+        ):
+            match = re.search(pattern, desc)
+            if match:
+                _add_unique(tags, _fmt_T("E.SELF_BUFF", **{field: _pct(match.group(1))}))
+
+    for pattern, params in (
+        (r"(?:自己|自身)?获得(?:物攻和魔攻|双攻)\+(\d+)%", ("atk", "spatk")),
+        (r"(?:自己|自身)?获得(?:物防和魔防|双防)\+(\d+)%", ("def", "spdef")),
+    ):
+        match = re.search(pattern, desc)
+        if match:
+            pct = _pct(match.group(1))
+            _add_unique(tags, _fmt_T("E.SELF_BUFF", **{params[0]: pct, params[1]: pct}))
+
+    for cn_name, field in (
+        ("物攻", "atk"),
+        ("物防", "def"),
+        ("魔攻", "spatk"),
+        ("魔防", "spdef"),
+        ("速度", "speed"),
+    ):
+        for pattern in (
+            rf"敌方获得{cn_name}-(\d+)%",
+            rf"敌方{cn_name}-(\d+)%",
+            rf"降低敌方(\d+)%{cn_name}",
+        ):
+            match = re.search(pattern, desc)
+            if match:
+                _add_unique(tags, _fmt_T("E.ENEMY_DEBUFF", **{field: _pct(match.group(1))}))
+
+    for pattern, params in (
+        (r"敌方获得(?:物攻和魔攻|双攻)-(\d+)%", ("atk", "spatk")),
+        (r"敌方获得(?:物防和魔防|双防)-(\d+)%", ("def", "spdef")),
+        (r"降低敌方(\d+)%物攻和物防", ("atk", "def")),
+    ):
+        match = re.search(pattern, desc)
+        if match:
+            pct = _pct(match.group(1))
+            _add_unique(tags, _fmt_T("E.ENEMY_DEBUFF", **{params[0]: pct, params[1]: pct}))
+
+    match = re.search(r"(?:自己|自身)?恢复(\d+)%生命", desc) or re.search(r"恢复(\d+)%生命", desc)
+    if match:
+        _add_unique(tags, _fmt_T("E.HEAL_HP", pct=_pct(match.group(1))))
+    elif "恢复" in desc and "%生命" in desc:
+        start = desc.find("恢复")
+        end = desc.find("%生命", start)
+        if start >= 0 and end > start:
+            value = desc[start + 2:end]
+            if value.isdigit():
+                _add_unique(tags, _fmt_T("E.HEAL_HP", pct=_pct(value)))
+
+    match = re.search(r"(?:自己|自身)?恢复(\d+)能量", desc) or re.search(r"恢复(\d+)能量", desc)
+    if match:
+        _add_unique(tags, _fmt_T("E.HEAL_ENERGY", amount=int(match.group(1))))
+
+    if (
+        re.search(r"(?:自己|自身)(?:返场|脱离)", desc)
+        or "随后脱离" in desc
+        or "紧急脱离" in desc
+    ) and "回合结束" not in desc:
+        _add_unique(tags, "T(E.FORCE_SWITCH)")
+
+    if (
+        re.search(r"(?:使)?敌方(?:精灵)?(?:返场|脱离)", desc)
+        or "使敌方精灵返场" in desc
+    ) and "回合结束" not in desc:
+        _add_unique(tags, "T(E.FORCE_ENEMY_SWITCH)")
+
+    match = re.search(r"敌方获得全攻击技能能耗\+(\d+)", desc)
+    if match:
+        _add_unique(tags, _fmt_T("E.ENEMY_ENERGY_COST_UP", amount=int(match.group(1)), filter="attack"))
+
+    match = re.search(r"敌方获得全技能能耗\+(\d+)", desc)
+    if match:
+        _add_unique(tags, _fmt_T("E.ENEMY_ENERGY_COST_UP", amount=int(match.group(1)), filter="all"))
+
+    if re.search(r"本次技能威力(?:翻倍|变为2倍)", desc):
+        _add_unique(tags, _fmt_T("E.POWER_DYNAMIC", condition="counter", multiplier=2.0))
+    else:
+        match = re.search(r"本次技能威力变为(\d+)倍", desc)
+        if match:
+            _add_unique(tags, _fmt_T("E.POWER_DYNAMIC", condition="counter", multiplier=float(match.group(1))))
+
+    if "若敌方本回合替换精灵" not in desc:
+        match = re.search(r"本次技能连击数\+(\d+)", desc)
+        if match:
+            _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="current_hit_count", value=int(match.group(1))))
+        elif re.search(r"本次技能连击数翻倍", desc):
+            _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="current_hit_count_mult", value=2.0))
+        else:
+            match = re.search(r"本次技能连击数变为(\d+)倍", desc)
+            if match:
+                _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="current_hit_count_mult", value=float(match.group(1))))
+
+    if "若敌方本回合替换精灵" in desc and "3连击" in desc:
+        _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="current_hit_count", value=2))
+
+    match = re.search(r"改为速度\+(\d+)", desc)
+    if match:
+        desired = _pct(match.group(1))
+        delta = round(desired - skill.self_speed, 2)
+        if delta > 0:
+            _add_unique(tags, _fmt_T("E.SELF_BUFF", speed=delta))
+
+    match = re.search(r"改为(?:能耗|全技能能耗)\+(\d+)", desc)
+    if match:
+        desired = int(match.group(1))
+        delta = desired - skill.enemy_energy_cost_up
+        if delta > 0:
+            _add_unique(tags, _fmt_T("E.ENEMY_ENERGY_COST_UP", amount=delta, filter="all"))
+
+    return tags
+
+
+def _parse_weather_tags(desc: str) -> List[str]:
+    tags: List[str] = []
+    if "放晴" in desc:
+        return tags
+
+    weather_rules = (
+        (r"(?:将|使|令|把)?天气(?:变为|改为|设置为|设为)?(?:雨天|下雨)", ("rain", 8)),
+        (r"(?:将|使|令|把)?天气(?:变为|改为|设置为|设为)?(?:沙暴|沙尘暴|风沙)", ("sandstorm", 8)),
+        (r"(?:将|使|令|把)?天气(?:变为|改为|设置为|设为)?(?:暴风雪|雪天|下雪)", ("snow", 8)),
+    )
+    for pattern, (weather_type, turns) in weather_rules:
+        if re.search(pattern, desc):
+            _add_unique(tags, _fmt_T("E.WEATHER", type=weather_type, turns=turns))
+            break
     return tags
 
 
 def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
-    desc = _normalize_desc(raw_desc)
+    desc = _normalize_desc(_strip_counter_clauses(raw_desc))
     tags: List[str] = []
 
     match = re.search(r"获得(\d+)%吸血", desc)
@@ -380,6 +563,17 @@ def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
         if match:
             _add_unique(tags, _fmt_T("E.NEXT_ATTACK_MOD", power_pct=float(max(0, int(match.group(1)) - 1))))
 
+    for pattern, target, stat, value_sign in (
+        (r"(?:自己|自身)?获得技能威力\+(\d+)", "self", "power", 1),
+        (r"敌方获得技能威力-(\d+)", "enemy", "power", -1),
+        (r"(?:自己|自身)?获得技能能耗-(\d+)", "self", "cost", -1),
+        (r"敌方获得技能能耗\+(\d+)", "enemy", "cost", 1),
+    ):
+        match = re.search(pattern, desc)
+        if match:
+            value = int(match.group(1)) * value_sign
+            _add_unique(tags, _fmt_T("E.SKILL_MOD", target=target, stat=stat, value=value))
+
     match = re.search(r"(?:自己|自身)?获得全技能威力\+(\d+)", desc)
     if match:
         _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="power_pct", value=_pct(match.group(1))))
@@ -395,6 +589,32 @@ def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
     match = re.search(r"敌方获得全技能能耗\+(\d+)", desc)
     if match:
         _add_unique(tags, _fmt_T("E.SKILL_MOD", target="enemy", stat="cost", value=int(match.group(1))))
+
+    for pattern, params in (
+        (
+            r"敌方本回合使用的技能能耗\+(\d+),?持续(\d+)回合",
+            {"filter": "used_skill"},
+        ),
+        (
+            r"敌方获得全攻击技能能耗\+(\d+),?持续(\d+)回合",
+            {"filter": "attack"},
+        ),
+        (
+            r"敌方除本回合使用的技能,?其他技能能耗\+(\d+),?持续(\d+)回合",
+            {"filter": "other_skills"},
+        ),
+    ):
+        match = re.search(pattern, desc)
+        if match:
+            _add_unique(
+                tags,
+                _fmt_T(
+                    "E.ENEMY_ENERGY_COST_UP",
+                    amount=int(match.group(1)),
+                    duration=int(match.group(2)),
+                    filter=params["filter"],
+                ),
+            )
 
     match = re.search(r"(?:自己|自身)?获得连击数\+(\d+)", desc)
     if match:
@@ -417,14 +637,17 @@ def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
         re.search(r"(?:自己|自身)(?:返场|脱离)", desc)
         or "随后脱离" in desc
         or "紧急脱离" in desc
-    ) and "回合结束时" not in desc:
+    ) and "回合结束" not in desc:
         _add_unique(tags, "T(E.FORCE_SWITCH)")
 
     if (
         re.search(r"(?:使)?敌方(?:精灵)?(?:返场|脱离)", desc)
         or "使敌方精灵返场" in desc
-    ) and "回合结束时" not in desc:
+    ) and "回合结束" not in desc:
         _add_unique(tags, "T(E.FORCE_ENEMY_SWITCH)")
+
+    for weather_tag in _parse_weather_tags(desc):
+        _add_unique(tags, weather_tag)
 
     if skill.category == SkillCategory.STATUS and "下一次行动" not in desc:
         match = re.search(r"敌方先手-([0-9]+)", desc)
@@ -434,11 +657,130 @@ def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
         if match:
             _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="priority", value=int(match.group(1))))
 
+    for pattern, kwargs in (
+        (r"若敌方本回合替换精灵,?本次技能威力\+(\d+)", {"condition": "enemy_switch", "bonus_key": "bonus"}),
+        (r"若上回合使用状态技能,?本次技能威力\+(\d+)", {"condition": "prev_status", "bonus_key": "bonus"}),
+        (r"若上回合应对成功,?本次技能威力\+(\d+)", {"condition": "prev_counter_success", "bonus_key": "bonus"}),
+        (r"释放后若能量耗尽,?本次攻击威力\+(\d+)", {"condition": "energy_zero_after_use", "bonus_key": "bonus"}),
+    ):
+        match = re.search(pattern, desc)
+        if match:
+            _add_unique(tags, _fmt_T("E.POWER_DYNAMIC", condition=kwargs["condition"], **{kwargs["bonus_key"]: int(match.group(1))}))
+
+    match = re.search(r"若敌方本回合替换精灵,?本次技能连击数\+(\d+)", desc)
+    if match:
+        _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="current_hit_count", value=int(match.group(1)), condition="enemy_switch"))
+
+    match = re.search(r"若敌方本回合替换精灵,?本次技能连击数翻倍", desc)
+    if match:
+        _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="current_hit_count_mult", value=2.0, condition="enemy_switch"))
+
+    match = re.search(r"若敌方能量小于等于(\d+),?造成(\d+)倍伤害", desc)
+    if match:
+        _add_unique(
+            tags,
+            _fmt_T(
+                "E.POWER_DYNAMIC",
+                condition="enemy_energy_leq",
+                threshold=int(match.group(1)),
+                multiplier=float(match.group(2)),
+            ),
+        )
+
+    match = re.search(r"本技能能耗每\+1,?威力\+(\d+)", desc)
+    if match:
+        _add_unique(
+            tags,
+            _fmt_T(
+                "E.POWER_DYNAMIC",
+                condition="energy_cost_above_base",
+                base_cost=skill.energy_cost,
+                bonus_per_step=int(match.group(1)),
+            ),
+        )
+
+    match = re.search(r"(?:自己)?每失去(\d+)%生命,?本次技能威力([+-])(\d+)", desc)
+    if match:
+        step_pct = _pct(match.group(1))
+        sign = -1 if match.group(2) == "-" else 1
+        bonus_per_step = sign * int(match.group(3))
+        _add_unique(
+            tags,
+            _fmt_T(
+                "E.POWER_DYNAMIC",
+                condition="self_missing_hp_step",
+                step_pct=step_pct,
+                bonus_per_step=bonus_per_step,
+            ),
+        )
+
+    match = re.search(r"若生命高于(\d+)%.*?使用后自己获得双攻([+-])(\d+)%", desc)
+    if match:
+        sign = -1 if match.group(2) == "-" else 1
+        pct = sign * _pct(match.group(3))
+        _add_unique(
+            tags,
+            _fmt_T(
+                "E.CONDITIONAL_BUFF",
+                condition="after_use_hp_gt_half",
+                buff={"atk": pct, "spatk": pct},
+            ),
+        )
+
+    if "使用后消耗全部生命" in desc:
+        _add_unique(tags, _fmt_T("E.SELF_KO"))
+
+    match = re.search(r"每次使用后,?本技能威力永久([+-])(\d+)", desc)
+    if match:
+        delta = int(match.group(2)) * (1 if match.group(1) == "+" else -1)
+        _add_unique(tags, _fmt_T("E.PERMANENT_MOD", target="power", delta=delta, trigger="per_use"))
+
+    match = re.search(r"每次使用后,?本技能连击数永久([+-])(\d+)", desc)
+    if match:
+        delta = int(match.group(2)) * (1 if match.group(1) == "+" else -1)
+        _add_unique(tags, _fmt_T("E.PERMANENT_MOD", target="hit_count", delta=delta, trigger="per_use"))
+
+    match = re.search(r"若(?:自己|自身)?(?:的)?生命低于(\d+)%,?本次技能连击数\+(\d+)", desc)
+    if match:
+        threshold = _pct(match.group(1))
+        _add_unique(
+            tags,
+            _fmt_T(
+                "E.SKILL_MOD",
+                target="self",
+                stat="current_hit_count",
+                value=int(match.group(2)),
+                condition="self_hp_below",
+                threshold=threshold,
+            ),
+        )
+
+    match = re.search(r"每次使用后,?本技能能耗永久([+-])(\d+)", desc)
+    if match:
+        delta = int(match.group(2)) * (1 if match.group(1) == "+" else -1)
+        _add_unique(tags, _fmt_T("E.PERMANENT_MOD", target="cost", delta=delta, trigger="per_use"))
+
+    match = re.search(r"回合结束时,?本技能能耗永久([+-])(\d+)", desc)
+    if match:
+        delta = int(match.group(2)) * (1 if match.group(1) == "+" else -1)
+        _add_unique(tags, _fmt_T("E.PERMANENT_MOD", target="cost", delta=delta, trigger="per_use"))
+
+    match = re.search(r"每次应对后本技能能耗([+-])(\d+)", desc)
+    if match:
+        delta = int(match.group(2)) * (1 if match.group(1) == "+" else -1)
+        _add_unique(tags, _fmt_T("E.PERMANENT_MOD", target="cost", delta=delta, trigger="per_counter"))
+
+    if "使用后能耗重置" in desc:
+        _add_unique(tags, _fmt_T("E.RESET_SKILL_COST", when="post_use"))
+
+    if skill.name == "气沉丹田":
+        _add_unique(tags, _fmt_T("E.HEAL_HP", pct=0.6))
+
     for marker, wrapper in _COUNTER_MARKERS.items():
         for current_marker, clause in _extract_counter_clauses(raw_desc):
             if current_marker != marker:
                 continue
-            for sub_tag in _parse_counter_clause_effects(clause):
+            for sub_tag in _parse_counter_clause_effects(skill, clause):
                 _add_unique(tags, f"{wrapper}({sub_tag})")
 
     return tags
@@ -446,6 +788,7 @@ def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
 
 def skill_to_tags(skill: Skill, raw_desc: str) -> List[str]:
     tags: List[str] = []
+    desc = _normalize_desc(raw_desc)
 
     if skill.agility:
         _add_unique(tags, "T(E.AGILITY)")
@@ -515,6 +858,15 @@ def skill_to_tags(skill: Skill, raw_desc: str) -> List[str]:
     if skill.enemy_energy_cost_up > 0:
         _add_unique(tags, _fmt_T("E.SKILL_MOD", target="enemy", stat="cost", value=skill.enemy_energy_cost_up))
 
+    # 无伤害的状态/防御技能中，“3连击”更接近对后续出招的连击增益，而不是技能自身多段。
+    if (
+        skill.power <= 0
+        and skill.category in (SkillCategory.STATUS, SkillCategory.DEFENSE)
+        and skill.hit_count > 1
+        and "连击数+" not in desc
+    ):
+        _add_unique(tags, _fmt_T("E.SKILL_MOD", target="self", stat="hit_count", value=skill.hit_count))
+
     for tag in _extra_desc_tags(skill, raw_desc):
         _add_unique(tags, tag)
 
@@ -560,8 +912,12 @@ def generate_mapping(rows: Iterable[sqlite3.Row]) -> tuple[Dict[str, List[str]],
         name = row["name"]
         if name in manual_in_db:
             continue
+        parsed_tags = tags_for_row(row)
         base_tags = list(base_mapping.get(name, []))
-        mapping[name] = base_tags if base_tags else tags_for_row(row)
+        if parsed_tags:
+            mapping[name] = parsed_tags
+            continue
+        mapping[name] = base_tags
 
     generated_nonempty = {name for name, tags in mapping.items() if tags}
     covered_total = len(manual_in_db | generated_nonempty)

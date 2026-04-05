@@ -290,6 +290,120 @@ ABILITY_EFFECTS = {
         ]),
     ],
 
+    # 专注力: 入场时，获得物攻+100%
+    "专注力": [
+        AE(Timing.ON_BATTLE_START, [T(E.SELF_BUFF, atk=1.0)]),
+        AE(Timing.ON_ENTER, [T(E.SELF_BUFF, atk=1.0)]),
+    ],
+
+    # 乘风连击: 使用翼系技能后，获得连击数+1
+    "乘风连击": [
+        AE(Timing.ON_USE_SKILL,
+           [T(E.SKILL_MOD, target="self", stat="hit_count", value=1)],
+           element="翼"),
+    ],
+
+    # 养分内循环: 回合结束时，回复6能量
+    "养分内循环": [
+        AE(Timing.ON_TURN_END, [T(E.HEAL_ENERGY, amount=6)]),
+    ],
+
+    # 养分重吸收: 回合结束时，回复3能量
+    "养分重吸收": [
+        AE(Timing.ON_TURN_END, [T(E.HEAL_ENERGY, amount=3)]),
+    ],
+
+    # 快充: 离场时回复10能量
+    "快充": [
+        AE(Timing.ON_LEAVE, [T(E.HEAL_ENERGY, amount=10)]),
+    ],
+
+    # 小偷小摸: 敌方换人时，新入场精灵失去2能量
+    "小偷小摸": [
+        AE(Timing.ON_ENEMY_SWITCH, [T(E.ENEMY_LOSE_ENERGY, amount=2, target="enemy_new")]),
+    ],
+
+    # 做噩梦: 敌方换人时，新入场精灵失去3能量
+    "做噩梦": [
+        AE(Timing.ON_ENEMY_SWITCH, [T(E.ENEMY_LOSE_ENERGY, amount=3, target="enemy_new")]),
+    ],
+
+    # 不移: 携带的无额外效果的攻击技能，威力+30%
+    "不移": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.3, pure_attack=True)
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.3, pure_attack=True)
+        ]),
+    ],
+
+    # 勇敢: 携带的能耗大于3的技能，威力+40%
+    "勇敢": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.4, energy_cost_gt=3)
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.4, energy_cost_gt=3)
+        ]),
+    ],
+
+    # 挺起胸脯: 携带的能耗为1的技能，威力+50%
+    "挺起胸脯": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.5, energy_cost_eq=1)
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.5, energy_cost_eq=1)
+        ]),
+    ],
+
+    # 快锤: 携带的能耗小于3的技能，获得迅捷
+    "快锤": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", grant_agility=True, energy_cost_lt=3)
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", grant_agility=True, energy_cost_lt=3)
+        ]),
+    ],
+
+    # 暴食: 携带的龙系技能获得迅捷
+    "暴食": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", grant_agility=True, element=["龙"])
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", grant_agility=True, element=["龙"])
+        ]),
+    ],
+
+    # 冰钻: 敌方携带技能总能耗每有1点，自己攻击时威力+10%
+    "冰钻": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills",
+              count_source="enemy_energy_sum", power_pct=0.1, attack_only=True)
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills",
+              count_source="enemy_energy_sum", power_pct=0.1, attack_only=True)
+        ]),
+    ],
+
+    # 冻土: 每携带1个冰系技能进入战斗，地系技能威力+10%
+    "冻土": [
+        AE(Timing.ON_BATTLE_START, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills",
+              count_source="self_element", count_element=["冰"],
+              element=["地"], power_pct=0.1, attack_only=True)
+        ]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills",
+              count_source="self_element", count_element=["冰"],
+              element=["地"], power_pct=0.1, attack_only=True)
+        ]),
+    ],
+
     # ── B队特性 ──
 
     # 燃薪虫 — 煤渣草: 在场时灼烧不衰减反而增长
