@@ -719,7 +719,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
                         continue
                     for tag in s.effects:
                         if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_counter":
-                            _apply_permanent_mod(current, s, tag.params)
+                            _apply_permanent_mod(current, s, tag.params, force=True)
 
             if counter_result.get("interrupted"):
                 result["interrupted"] = True
@@ -757,7 +757,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
                         for tag in s.effects:
                             if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_counter":
                                 # 能量刃：每应对1次威力永久+N
-                                _apply_permanent_mod(current, s, tag.params)
+                                _apply_permanent_mod(current, s, tag.params, force=True)
 
                 if counter_succeeded:
                     _handle_counter_success_ability(state, enemy, enemy_skill, defer_transform=True)

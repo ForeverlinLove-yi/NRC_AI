@@ -164,14 +164,17 @@ def _adjust_cost_delta(pokemon: "Pokemon", delta: int) -> int:
     return -delta if _ability_name(pokemon) == "对流" else delta
 
 
-def _apply_permanent_mod(user: "Pokemon", skill: "Skill", params: Dict) -> None:
-    """应用永久修改（能耗/威力）。per_counter 由 execute_counter 单独调用本函数。"""
+def _apply_permanent_mod(user: "Pokemon", skill: "Skill", params: Dict,
+                         force: bool = False) -> None:
+    """应用永久修改（能耗/威力）。
+    per_counter 和 per_position_change 由外部手动调用时传 force=True 绕过 guard。
+    """
     target = params.get("target", "")
     delta = params.get("delta", 0)
     trigger = params.get("trigger", "")
 
-    # per_position_change 由 execute_drive 单独处理
-    if trigger == "per_position_change":
+    # 非 force 模式下，跳过需要由外部手动触发的类型
+    if not force and trigger in ("per_position_change", "per_counter"):
         return
 
     if target == "cost":

@@ -179,14 +179,16 @@ def test_energy_blade_per_counter_power_increase():
                         spatk=80, spdef=80, speed=100,
                         ptype=Type.FIGHTING, skills=[energy_blade])
 
-    # 模拟 per_counter 触发：直接调用 _apply_permanent_mod
+    # 模拟 per_counter 触发：直接调用 _apply_permanent_mod（force=True 模拟 battle.py 的手动调用路径）
     _apply_permanent_mod(user, energy_blade,
-                         {"target": "power", "delta": 90, "trigger": "per_counter"})
+                         {"target": "power", "delta": 90, "trigger": "per_counter"},
+                         force=True)
     assert energy_blade.power == 210, \
         f"第1次应对后威力期望210，实际{energy_blade.power}"
 
     _apply_permanent_mod(user, energy_blade,
-                         {"target": "power", "delta": 90, "trigger": "per_counter"})
+                         {"target": "power", "delta": 90, "trigger": "per_counter"},
+                         force=True)
     assert energy_blade.power == 300, \
         f"第2次应对后威力期望300，实际{energy_blade.power}"
 
