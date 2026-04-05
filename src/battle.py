@@ -17,6 +17,28 @@ from src.effect_models import E, Timing
 from src.effect_engine import EffectExecutor, _apply_permanent_mod, _adjust_cost_delta
 
 
+def _iter_flat_tags(effects):
+    """从 List[SkillEffect] 或 List[EffectTag] 中提取所有 EffectTag（平铺）。"""
+    from src.effect_models import SkillEffect
+    if not effects:
+        return
+    for item in effects:
+        if isinstance(item, SkillEffect):
+            yield from item.effects
+        else:
+            yield item
+
+
+def _has_tag_type(effects, etype) -> bool:
+    """检查效果列表中是否存在某类型的 EffectTag。"""
+    return any(tag.type == etype for tag in _iter_flat_tags(effects))
+
+
+def _find_tags(effects, etype):
+    """返回效果列表中所有匹配类型的 EffectTag。"""
+    return [tag for tag in _iter_flat_tags(effects) if tag.type == etype]
+
+
 def _ability_name(pokemon: Pokemon) -> str:
     if not pokemon.ability:
         return ""
@@ -685,7 +707,7 @@ def _execute_with_counter(state: BattleState, team: str, action: Action,
         + getattr(current, "skill_cost_mod", 0)
         + _temporary_skill_cost_delta(current, skill),
     )
-    for tag in getattr(skill, "effects", []):
+    for tag in _iter_flat_tags(getattr(skill, "effects", [])):
         if tag.type == E.ENERGY_COST_DYNAMIC:
             per = tag.params.get("per", "")
             reduce = tag.params.get("reduce", 0)
@@ -732,13 +754,13 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
     # 先检查敌方技能是否有防御减伤（防御/风墙/听桥/火焰护盾等）
     # damage_reduction 先于应对效果结算
     if enemy_skill and hasattr(enemy_skill, "effects") and enemy_skill.effects:
-        for e2 in enemy_skill.effects:
+        for e2 in _iter_flat_tags(enemy_skill.effects):
             if e2.type == E.DAMAGE_REDUCTION and damage > 0:
                 pct = e2.params.get("pct", 0)
                 damage = int(damage * (1.0 - pct))
 
     # 应对解析 (我方技能有 COUNTER_*，如毒液渗透/偷袭等)
-    should_resolve_self_counters = any(tag.type == E.DAMAGE for tag in skill.effects)
+    should_resolve_self_counters = _has_tag_type(skill.effects, E.DAMAGE)
     if enemy_skill and not enemy.is_fainted and result["counter_effects"] and should_resolve_self_counters:
         for counter_tag in result["counter_effects"]:
             pre_counter_count = state.counter_count_a if team == "a" else state.counter_count_b
@@ -759,7 +781,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
                 for s in current.skills:
                     if not getattr(s, "effects", None):
                         continue
-                    for tag in s.effects:
+                    for tag in _iter_flat_tags(s.effects):
                         if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_counter":
                             _apply_permanent_mod(current, s, tag.params, force=True)
 
@@ -779,8 +801,16 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
     # 对方技能的应对效果（对方防御/状态技能应对我方攻击）
     # 传入原始伤害（听桥需要反弹原始伤害）
     if enemy_skill and hasattr(enemy_skill, "effects") and enemy_skill.effects:
-        for etag in enemy_skill.effects:
-            if etag.type in (E.COUNTER_ATTACK, E.COUNTER_STATUS, E.COUNTER_DEFENSE):
+        _counter_items = []
+        for item in enemy_skill.effects:
+            from src.effect_models import SkillEffect as _SE
+            if isinstance(item, _SE):
+                from src.effect_models import SkillTiming as _ST
+                if item.timing == _ST.ON_COUNTER:
+                    _counter_items.append(item)
+            elif hasattr(item, "type") and item.type in (E.COUNTER_ATTACK, E.COUNTER_STATUS, E.COUNTER_DEFENSE):
+                _counter_items.append(item)
+        for etag in _counter_items:
                 pre_counter_count = (
                     state.counter_count_a if enemy_team == "a" else state.counter_count_b
                 )
@@ -797,7 +827,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
                     for s in enemy.skills:
                         if not getattr(s, "effects", None):
                             continue
-                        for tag in s.effects:
+                        for tag in _iter_flat_tags(s.effects):
                             if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_counter":
                                 # 能量刃：每应对1次威力永久+N
                                 _apply_permanent_mod(enemy, s, tag.params, force=True)
@@ -846,7 +876,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
     # 击败检查 & 击败时效果
     if enemy.is_fainted:
         # 感染病: 击败时中毒转印记
-        for tag in skill.effects:
+        for tag in _iter_flat_tags(skill.effects):
             if tag.type == E.CONVERT_POISON_TO_MARK and tag.params.get("on") == "kill":
                 marks = state.marks_b if team == "a" else state.marks_a
                 marks["poison_mark"] = marks.get("poison_mark", 0) + enemy.poison_stacks
@@ -908,7 +938,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
         # 检查对方是否使用了防御/减伤技能
         was_blocked = False
         if enemy_skill and enemy_skill.effects:
-            was_blocked = any(e.type == E.DAMAGE_REDUCTION for e in enemy_skill.effects)
+            was_blocked = _has_tag_type(enemy_skill.effects, E.DAMAGE_REDUCTION)
         elif enemy_skill and enemy_skill.damage_reduction > 0:
             was_blocked = True
         if not was_blocked:
@@ -929,7 +959,7 @@ def _execute_new_engine(state: BattleState, team: str, enemy_team: str,
         )
 
     # 技能自身的永久变化（每次使用后）
-    for tag in getattr(skill, "effects", []):
+    for tag in _iter_flat_tags(getattr(skill, "effects", [])):
         if tag.type == E.PERMANENT_MOD and tag.params.get("trigger") == "per_use":
             _apply_permanent_mod(current, skill, tag.params, force=True)
 

@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.battle import execute_full_turn
-from src.effect_models import E, EffectTag, Timing
+from src.effect_models import E, EffectTag, Timing, SkillEffect, SkillTiming
 from src.models import BattleState, Pokemon, Skill, SkillCategory, Type
 from src.skill_db import load_ability_effects
 from src.effect_engine import EffectExecutor
@@ -82,8 +82,8 @@ def test_guard_transforms_after_two_defense_counters():
         "guard",
         category=SkillCategory.DEFENSE,
         effects=[
-            EffectTag(E.DAMAGE_REDUCTION, {"pct": 0.5}),
-            EffectTag(E.COUNTER_ATTACK, sub_effects=[]),
+            SkillEffect(SkillTiming.ON_USE, [EffectTag(E.DAMAGE_REDUCTION, {"pct": 0.5})]),
+            SkillEffect(SkillTiming.ON_COUNTER, [], {"category": "attack"}),
         ],
     )
     attack = make_skill("slash", power=80, category=SkillCategory.PHYSICAL, effects=[EffectTag(E.DAMAGE)])

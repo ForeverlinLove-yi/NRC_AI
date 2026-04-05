@@ -12,8 +12,8 @@ import re
 import sqlite3
 import subprocess
 import sys
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Sequence
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -100,6 +100,12 @@ _COUNTER_MARKERS = {
     "应对防御": "on_defense",
 }
 
+_COUNTER_CATEGORY_MAP = {
+    "应对攻击": "attack",
+    "应对状态": "status",
+    "应对防御": "defense",
+}
+
 _STAT_FIELD_MAP = {
     "物攻": "atk",
     "物防": "def",
@@ -127,6 +133,28 @@ _FLOAT_SKILL_FIELDS = {
     "enemy_all_atk",
     "enemy_all_def",
 }
+
+_TIMING_ORDER = ["PRE_USE", "ON_USE", "ON_HIT", "ON_COUNTER", "IF", "POST_USE"]
+_TIMING_INDEX = {t: i for i, t in enumerate(_TIMING_ORDER)}
+
+_POST_USE_TYPES = {
+    "SELF_KO",
+    "PERMANENT_MOD",
+    "ENERGY_COST_ACCUMULATE",
+    "RESET_SKILL_COST",
+    "DRIVE",
+    "REPLAY_AGILITY",
+    "AGILITY_COST_SHARE",
+}
+
+
+@dataclass
+class SEEntry:
+    """Intermediate representation of an SE() call in the generated output."""
+
+    timing: str  # "PRE_USE", "ON_USE", "ON_HIT", "ON_COUNTER", "IF", "POST_USE"
+    tags: List[str]  # The T(...) strings for this timing
+    kwargs: Dict[str, Any] = field(default_factory=dict)
 
 
 def _normalize_desc(desc: str) -> str:
@@ -204,6 +232,171 @@ def _tag_signature(tag: str) -> str:
 
     return compact
 
+
+# ---------------------------------------------------------------------------
+# Timing classification helpers
+# ---------------------------------------------------------------------------
+
+def _get_timing(tag: str) -> str:
+    """Determine the SkillTiming bucket for a flat T(...) tag string."""
+    m = re.match(r"T\(E\.(\w+)", tag)
+    if not m:
+        return "ON_USE"
+    etype = m.group(1)
+
+    # PRE_USE
+    if etype == "ENERGY_COST_DYNAMIC":
+        return "PRE_USE"
+    if etype in ("SELF_BUFF", "SELF_DEBUFF", "ENEMY_DEBUFF"):
+        return "PRE_USE"
+
+    # ON_HIT
+    if etype == "LIFE_DRAIN":
+        return "ON_HIT"
+    if etype == "CONVERT_POISON_TO_MARK" and "on='kill'" in tag:
+        return "ON_HIT"
+
+    # POWER_DYNAMIC — some conditions are IF, others stay ON_USE
+    if etype == "POWER_DYNAMIC":
+        for cond in (
+            "first_strike",
+            "enemy_switch",
+            "prev_status",
+            "prev_counter_success",
+            "energy_zero_after_use",
+        ):
+            if f"condition='{cond}'" in tag:
+                return "IF"
+        # per_poison, enemy_energy_leq, self_missing_hp_step,
+        # energy_cost_above_base, counter → stay in ON_USE (or ON_COUNTER)
+        return "ON_USE"
+
+    # CONDITIONAL_BUFF
+    if etype == "CONDITIONAL_BUFF":
+        if "after_use_hp_gt_half" in tag:
+            return "POST_USE"
+        if "enemy_switch" in tag:
+            return "IF"
+        return "ON_USE"
+
+    # SKILL_MOD — conditional variants go to IF
+    if etype == "SKILL_MOD":
+        if "condition='enemy_switch'" in tag:
+            return "IF"
+        if "condition='self_hp_below'" in tag:
+            return "IF"
+        return "ON_USE"
+
+    # ENEMY_ENERGY_COST_UP — with duration → POST_USE, else ON_USE
+    if etype == "ENEMY_ENERGY_COST_UP":
+        if "duration=" in tag:
+            return "POST_USE"
+        return "ON_USE"
+
+    # Explicit POST_USE types
+    if etype in _POST_USE_TYPES:
+        return "POST_USE"
+
+    # Default — ON_USE covers DAMAGE, DAMAGE_REDUCTION, AGILITY, statuses, etc.
+    return "ON_USE"
+
+
+def _get_se_kwargs(tag: str, timing: str) -> Dict[str, Any]:
+    """Extract SE filter kwargs for tags that need them (IF / certain POST_USE)."""
+    if timing not in ("IF", "POST_USE"):
+        return {}
+
+    if "condition='first_strike'" in tag:
+        return {"first_strike": True}
+    if "condition='enemy_switch'" in tag:
+        return {"enemy_switch": True}
+    if "condition='prev_status'" in tag:
+        return {"prev_status": True}
+    if "condition='prev_counter_success'" in tag:
+        return {"prev_counter_success": True}
+    if "condition='energy_zero_after_use'" in tag:
+        return {"energy_zero_after": True}
+    if "condition='after_use_hp_gt_half'" in tag:
+        return {"self_hp_gt": 0.5}
+    if "condition='self_hp_below'" in tag:
+        m = re.search(r"threshold=([\d.]+)", tag)
+        return {"self_hp_below": float(m.group(1)) if m else 0.5}
+
+    return {}
+
+
+def _transform_tag_for_se(tag: str) -> str:
+    """Transform tags that need modification for SE format.
+
+    E.CONDITIONAL_BUFF → unwrap into E.SELF_BUFF with the buff dict expanded
+    as keyword arguments.
+    """
+    if "E.CONDITIONAL_BUFF" not in tag:
+        return tag
+
+    m = re.search(r"buff=(\{[^}]+\})", tag)
+    if not m:
+        return tag
+
+    buff_dict: Dict[str, float] = {}
+    for pair in re.finditer(r"'(\w+)':\s*([-\d.]+)", m.group(1)):
+        buff_dict[pair.group(1)] = float(pair.group(2))
+    if buff_dict:
+        return _fmt_T("E.SELF_BUFF", buff_dict)
+    return tag
+
+
+def _categorize_tags(flat_tags: List[str]) -> List[SEEntry]:
+    """Bin flat T(...) tag strings into SEEntry groups by timing."""
+    bins: Dict[str, List[str]] = {t: [] for t in _TIMING_ORDER}
+    special_entries: List[SEEntry] = []
+
+    for tag in flat_tags:
+        timing = _get_timing(tag)
+        kwargs = _get_se_kwargs(tag, timing)
+        transformed = _transform_tag_for_se(tag)
+
+        if kwargs:
+            special_entries.append(SEEntry(timing, [transformed], kwargs))
+        else:
+            bins[timing].append(transformed)
+
+    result: List[SEEntry] = []
+    for timing in _TIMING_ORDER:
+        if timing == "ON_COUNTER":
+            continue  # counter entries handled separately in skill_to_tags
+        if bins[timing]:
+            result.append(SEEntry(timing, bins[timing], {}))
+
+    # Merge special entries that share the same (timing, kwargs)
+    merged: Dict[tuple, SEEntry] = {}
+    for entry in special_entries:
+        key = (entry.timing, tuple(sorted(entry.kwargs.items())))
+        if key in merged:
+            for t in entry.tags:
+                if t not in merged[key].tags:
+                    merged[key].tags.append(t)
+        else:
+            merged[key] = SEEntry(entry.timing, list(entry.tags), dict(entry.kwargs))
+    result.extend(merged.values())
+
+    # Sort by canonical timing order
+    result.sort(key=lambda e: _TIMING_INDEX.get(e.timing, 99))
+    return result
+
+
+def _render_se(entry: SEEntry) -> str:
+    """Render an SEEntry into an ``SE(SkillTiming.XXX, [...], ...)`` string."""
+    tags_str = ", ".join(entry.tags)
+    parts = [f"SkillTiming.{entry.timing}", f"[{tags_str}]"]
+    for k, v in sorted(entry.kwargs.items()):
+        parts.append(f"{k}={repr(v)}")
+    return "SE(" + ", ".join(parts) + ")"
+
+
+# ---------------------------------------------------------------------------
+# Skill field helpers (unchanged)
+# ---------------------------------------------------------------------------
 
 def _set_skill_field(skill: Skill, field: str, value: float | int) -> None:
     current = getattr(skill, field)
@@ -546,6 +739,12 @@ def _parse_weather_tags(desc: str) -> List[str]:
 
 
 def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
+    """Return flat T(...) tag strings from the skill description.
+
+    NOTE: counter-clause effects (应对攻击/应对状态/应对防御) are **not** included
+    here.  They are handled separately in ``skill_to_tags()`` as ``SEEntry``
+    objects with ``timing="ON_COUNTER"``.
+    """
     desc = _normalize_desc(_strip_counter_clauses(raw_desc))
     tags: List[str] = []
 
@@ -776,17 +975,13 @@ def _extra_desc_tags(skill: Skill, raw_desc: str) -> List[str]:
     if skill.name == "气沉丹田":
         _add_unique(tags, _fmt_T("E.HEAL_HP", pct=0.6))
 
-    for marker, wrapper in _COUNTER_MARKERS.items():
-        for current_marker, clause in _extract_counter_clauses(raw_desc):
-            if current_marker != marker:
-                continue
-            for sub_tag in _parse_counter_clause_effects(skill, clause):
-                _add_unique(tags, f"{wrapper}({sub_tag})")
+    # NOTE: counter clauses are handled in skill_to_tags() directly as SEEntry objects.
 
     return tags
 
 
-def skill_to_tags(skill: Skill, raw_desc: str) -> List[str]:
+def skill_to_tags(skill: Skill, raw_desc: str) -> List[SEEntry]:
+    """Convert a skill's parsed fields + description into a list of SEEntry objects."""
     tags: List[str] = []
     desc = _normalize_desc(raw_desc)
 
@@ -858,7 +1053,7 @@ def skill_to_tags(skill: Skill, raw_desc: str) -> List[str]:
     if skill.enemy_energy_cost_up > 0:
         _add_unique(tags, _fmt_T("E.SKILL_MOD", target="enemy", stat="cost", value=skill.enemy_energy_cost_up))
 
-    # 无伤害的状态/防御技能中，“3连击”更接近对后续出招的连击增益，而不是技能自身多段。
+    # 无伤害的状态/防御技能中，"3连击"更接近对后续出招的连击增益，而不是技能自身多段。
     if (
         skill.power <= 0
         and skill.category in (SkillCategory.STATUS, SkillCategory.DEFENSE)
@@ -870,7 +1065,27 @@ def skill_to_tags(skill: Skill, raw_desc: str) -> List[str]:
     for tag in _extra_desc_tags(skill, raw_desc):
         _add_unique(tags, tag)
 
-    return tags
+    # --- Categorize flat tags into SE timing bins ---
+    se_list = _categorize_tags(tags)
+
+    # --- Build counter SEEntry objects from 应对 clauses ---
+    counter_entries: List[SEEntry] = []
+    for current_marker, clause in _extract_counter_clauses(raw_desc):
+        category = _COUNTER_CATEGORY_MAP[current_marker]
+        sub_tags = _parse_counter_clause_effects(skill, clause)
+        counter_entries.append(SEEntry("ON_COUNTER", sub_tags, {"category": category}))
+
+    if counter_entries:
+        # Insert counter entries after ON_HIT and before IF
+        insert_idx = 0
+        for i, entry in enumerate(se_list):
+            if _TIMING_INDEX.get(entry.timing, 99) < _TIMING_INDEX["ON_COUNTER"]:
+                insert_idx = i + 1
+        for entry in counter_entries:
+            se_list.insert(insert_idx, entry)
+            insert_idx += 1
+
+    return se_list
 
 
 def build_skill_from_row(row: sqlite3.Row) -> Skill:
@@ -885,7 +1100,7 @@ def build_skill_from_row(row: sqlite3.Row) -> Skill:
     return skill
 
 
-def tags_for_row(row: sqlite3.Row) -> List[str]:
+def tags_for_row(row: sqlite3.Row) -> List[SEEntry]:
     skill = build_skill_from_row(row)
     return skill_to_tags(skill, row["description"] or "")
 
@@ -901,25 +1116,29 @@ class CoverageStats:
     uncovered_total: int
 
 
-def generate_mapping(rows: Iterable[sqlite3.Row]) -> tuple[Dict[str, List[str]], CoverageStats]:
+def generate_mapping(rows: Iterable[sqlite3.Row]) -> tuple[Dict[str, List[SEEntry]], CoverageStats]:
     rows = list(rows)
     all_names = {row["name"] for row in rows}
     manual_in_db = {name for name in MANUAL_EFFECTS if name in all_names}
     base_mapping = load_committed_generated_mapping()
-    mapping: Dict[str, List[str]] = {}
+    mapping: Dict[str, List[SEEntry]] = {}
 
     for row in sorted(rows, key=lambda item: item["name"]):
         name = row["name"]
         if name in manual_in_db:
             continue
-        parsed_tags = tags_for_row(row)
-        base_tags = list(base_mapping.get(name, []))
-        if parsed_tags:
-            mapping[name] = parsed_tags
+        parsed_se = tags_for_row(row)
+        if parsed_se:
+            mapping[name] = parsed_se
             continue
-        mapping[name] = base_tags
+        # Fallback: wrap raw base tags (old format) in a single ON_USE entry
+        base_tags = list(base_mapping.get(name, []))
+        if base_tags:
+            mapping[name] = [SEEntry("ON_USE", base_tags, {})]
+        else:
+            mapping[name] = []
 
-    generated_nonempty = {name for name, tags in mapping.items() if tags}
+    generated_nonempty = {name for name, se_list in mapping.items() if se_list}
     covered_total = len(manual_in_db | generated_nonempty)
     stats = CoverageStats(
         db_total=len(all_names),
@@ -933,7 +1152,7 @@ def generate_mapping(rows: Iterable[sqlite3.Row]) -> tuple[Dict[str, List[str]],
     return mapping, stats
 
 
-def render_generated_file(mapping: Dict[str, List[str]]) -> str:
+def render_generated_file(mapping: Dict[str, List[SEEntry]]) -> str:
     lines = [
         '"""',
         "skill_effects_generated.py - 自动生成，请勿手动编辑。",
@@ -941,24 +1160,26 @@ def render_generated_file(mapping: Dict[str, List[str]]) -> str:
         "由 scripts/generate_skill_effects.py 从数据库 description 批量生成。",
         '"""',
         "",
-        "from src.effect_models import E, EffectTag",
-        "from src.effect_data import T, on_attack, on_status, on_defense",
+        "from src.effect_models import E, EffectTag, SkillTiming",
+        "from src.effect_data import T, SE",
         "",
         "SKILL_EFFECTS_GENERATED = {",
     ]
 
     for name in sorted(mapping):
-        tags = mapping[name]
+        se_list = mapping[name]
         escaped = name.replace('"', '\\"')
-        if not tags:
+        if not se_list:
             lines.append(f'    "{escaped}": [],')
             continue
-        if len(tags) == 1:
-            lines.append(f'    "{escaped}": [{tags[0]}],')
+
+        rendered = [_render_se(entry) for entry in se_list]
+        if len(rendered) == 1:
+            lines.append(f'    "{escaped}": [{rendered[0]}],')
             continue
         lines.append(f'    "{escaped}": [')
-        for tag in tags:
-            lines.append(f"        {tag},")
+        for se_str in rendered:
+            lines.append(f"        {se_str},")
         lines.append("    ],")
 
     lines.append("}")

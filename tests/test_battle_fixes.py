@@ -15,7 +15,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models import Pokemon, Skill, BattleState, Type, SkillCategory, StatusType
-from src.effect_models import E, EffectTag, Timing, AbilityEffect
+from src.effect_models import E, EffectTag, Timing, AbilityEffect, SkillEffect, SkillTiming
 from src.effect_engine import EffectExecutor
 from src.battle import DamageCalculator, execute_full_turn
 
@@ -60,10 +60,8 @@ def test_listen_bridge_reflects_original_damage():
         "听桥", power=0, energy=3,
         category=SkillCategory.DEFENSE,
         effects=[
-            EffectTag(E.DAMAGE_REDUCTION, {"pct": 0.6}),
-            EffectTag(E.COUNTER_ATTACK, sub_effects=[
-                EffectTag(E.MIRROR_DAMAGE)
-            ]),
+            SkillEffect(SkillTiming.ON_USE, [EffectTag(E.DAMAGE_REDUCTION, {"pct": 0.6})]),
+            SkillEffect(SkillTiming.ON_COUNTER, [EffectTag(E.MIRROR_DAMAGE)], {"category": "attack"}),
         ]
     )
 
@@ -134,7 +132,7 @@ def test_listen_bridge_vs_reduced_damage():
     EffectExecutor.execute_counter(
         state, defender, attacker_original,
         make_skill("听桥", power=0),
-        EffectTag(E.COUNTER_ATTACK, sub_effects=[EffectTag(E.MIRROR_DAMAGE)]),
+        SkillEffect(SkillTiming.ON_COUNTER, [EffectTag(E.MIRROR_DAMAGE)], {"category": "attack"}),
         attack_skill, original_dmg, "b",
     )
 
@@ -144,7 +142,7 @@ def test_listen_bridge_vs_reduced_damage():
     EffectExecutor.execute_counter(
         state2, defender, attacker_reduced,
         make_skill("听桥", power=0),
-        EffectTag(E.COUNTER_ATTACK, sub_effects=[EffectTag(E.MIRROR_DAMAGE)]),
+        SkillEffect(SkillTiming.ON_COUNTER, [EffectTag(E.MIRROR_DAMAGE)], {"category": "attack"}),
         attack_skill, reduced_dmg, "b",
     )
 
@@ -212,7 +210,7 @@ def test_unmatched_counter_does_not_grant_per_counter_bonus():
         power=0,
         energy=0,
         category=SkillCategory.STATUS,
-        effects=[EffectTag(E.COUNTER_STATUS, sub_effects=[])],
+        effects=[SkillEffect(SkillTiming.ON_COUNTER, [], {"category": "status"})],
     )
 
     attacker = make_pokemon("我方", attack=140, skills=[normal_attack, energy_blade], ptype=Type.FIGHTING)
@@ -247,8 +245,8 @@ def test_enemy_successful_counter_grants_its_own_per_counter_bonus():
         "听桥", power=0, energy=0,
         category=SkillCategory.DEFENSE,
         effects=[
-            EffectTag(E.DAMAGE_REDUCTION, {"pct": 0.6}),
-            EffectTag(E.COUNTER_ATTACK, sub_effects=[]),
+            SkillEffect(SkillTiming.ON_USE, [EffectTag(E.DAMAGE_REDUCTION, {"pct": 0.6})]),
+            SkillEffect(SkillTiming.ON_COUNTER, [], {"category": "attack"}),
         ],
     )
 
@@ -271,10 +269,10 @@ def test_counter_power_dynamic_updates_damage():
         category=SkillCategory.PHYSICAL,
         skill_type=Type.DARK,
         effects=[
-            EffectTag(E.DAMAGE),
-            EffectTag(E.COUNTER_STATUS, sub_effects=[
+            SkillEffect(SkillTiming.ON_USE, [EffectTag(E.DAMAGE)]),
+            SkillEffect(SkillTiming.ON_COUNTER, [
                 EffectTag(E.POWER_DYNAMIC, {"condition": "counter", "multiplier": 3.0}),
-            ]),
+            ], {"category": "status"}),
         ],
     )
     enemy_status = make_skill("强化", power=0, energy=0, category=SkillCategory.STATUS, effects=[])

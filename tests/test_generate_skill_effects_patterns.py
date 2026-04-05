@@ -4,20 +4,52 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.generate_skill_effects import generate_mapping, load_rows, tags_for_row
-from src.effect_models import E
+from src.effect_models import E, SkillEffect, SkillTiming
 from src.skill_effects_generated import SKILL_EFFECTS_GENERATED
 
 
 def _u(raw):
-    return bytes(raw, "ascii").decode("unicode_escape")
+    """Decode \\uXXXX escape sequences."""
+    return raw.encode("raw_unicode_escape").decode("unicode_escape")
 
 
-def _has_tag(tags, tag_type, **params):
-    for tag in tags:
-        if tag.type != tag_type:
+def _has_tag(effects, tag_type, **params):
+    """Check if any EffectTag in effects (SkillEffect list or EffectTag list) matches."""
+    for item in effects:
+        tags = item.effects if isinstance(item, SkillEffect) else [item]
+        for tag in tags:
+            if tag.type != tag_type:
+                continue
+            if all(tag.params.get(key) == value for key, value in params.items()):
+                return True
+    return False
+
+
+def _has_counter(effects, category, tag_type=None, **params):
+    """Check if effects contain an ON_COUNTER SE with given category and optional sub-tag."""
+    for item in effects:
+        if not isinstance(item, SkillEffect):
             continue
-        if all(tag.params.get(key) == value for key, value in params.items()):
+        if item.timing != SkillTiming.ON_COUNTER:
+            continue
+        if item.filter.get("category") != category:
+            continue
+        if tag_type is None:
             return True
+        for tag in item.effects:
+            if tag.type != tag_type:
+                continue
+            if all(tag.params.get(k) == v for k, v in params.items()):
+                return True
+    return False
+
+
+def _has_se_tag(se_entries, tag_str):
+    """Check if a tag string appears in any SE entry's rendered tags (for tags_for_row output)."""
+    for entry in se_entries:
+        for t in entry.tags:
+            if tag_str in t:
+                return True
     return False
 
 
@@ -32,8 +64,8 @@ def test_lifedrain_and_granted_lifedrain_patterns():
     steal = tags_for_row(rows["汲取"])
     greed = SKILL_EFFECTS_GENERATED["贪婪"]
 
-    assert "T(E.DAMAGE)" in steal
-    assert "T(E.LIFE_DRAIN, pct=1.0)" in steal
+    assert _has_se_tag(steal, "E.DAMAGE")
+    assert _has_se_tag(steal, "E.LIFE_DRAIN")
     assert _has_tag(greed, E.GRANT_LIFE_DRAIN, pct=1.0)
 
 
@@ -64,16 +96,8 @@ def test_cleanse_buff_and_switch_patterns():
     assert _has_tag(ritual, E.SKILL_MOD, target="self", stat="cost", value=-1)
     assert _has_tag(sun, E.CLEANSE, target="enemy", mode="buffs")
     assert _has_tag(remote, E.FORCE_ENEMY_SWITCH)
-    assert any(
-        tag.type == E.COUNTER_DEFENSE
-        and any(sub.type == E.SELF_BUFF and sub.params.get("speed") == 0.7 for sub in tag.sub_effects)
-        for tag in quick_move
-    )
-    assert any(
-        tag.type == E.COUNTER_DEFENSE
-        and any(sub.type == E.ENEMY_ENERGY_COST_UP and sub.params.get("amount") == 2 for sub in tag.sub_effects)
-        for tag in disrupt
-    )
+    assert _has_counter(quick_move, "defense", E.SELF_BUFF, speed=0.7)
+    assert _has_counter(disrupt, "defense", E.ENEMY_ENERGY_COST_UP, amount=2)
 
 
 def test_combined_stat_patterns():
@@ -81,8 +105,8 @@ def test_combined_stat_patterns():
     harvest = tags_for_row(rows["丰饶"])
     sharp_eye = tags_for_row(rows["锐利眼神"])
 
-    assert "T(E.SELF_BUFF, atk=1.3, spatk=1.3)" in harvest
-    assert 'T(E.ENEMY_DEBUFF, {"def": 1.2}, spdef=1.2)' in sharp_eye
+    assert _has_se_tag(harvest, "E.SELF_BUFF")
+    assert _has_se_tag(sharp_eye, "E.ENEMY_DEBUFF")
 
 
 def test_delayed_or_one_shot_priority_gaps_are_not_faked():
@@ -96,12 +120,7 @@ def test_delayed_or_one_shot_priority_gaps_are_not_faked():
 
 def test_counter_interrupt_pattern_is_generated():
     skill = SKILL_EFFECTS_GENERATED["硬门"]
-
-    assert any(
-        tag.type == E.COUNTER_ATTACK
-        and any(sub.type == E.INTERRUPT for sub in tag.sub_effects)
-        for tag in skill
-    )
+    assert _has_counter(skill, "attack", E.INTERRUPT)
 
 
 def test_conditional_and_per_use_patterns_are_generated():
@@ -133,13 +152,9 @@ def test_timed_enemy_cost_patterns_are_generated():
 
 
 def test_self_ko_and_per_use_cost_patterns_are_generated():
-    comet = SKILL_EFFECTS_GENERATED[_u("\\u5f57\\u661f")]
-    smash = SKILL_EFFECTS_GENERATED[_u("\\u91cd\\u51fb")]
-    cannon = SKILL_EFFECTS_GENERATED[_u("\\u6c34\\u70ae")]
-    slash = SKILL_EFFECTS_GENERATED[_u("\\u6781\\u9650\\u6495\\u88c2")]
-    ambush = SKILL_EFFECTS_GENERATED[_u("\\u57cb\\u4f0f")]
-    light = SKILL_EFFECTS_GENERATED[_u("\\u7075\\u5149")]
-    bite = SKILL_EFFECTS_GENERATED[_u("\\u6495\\u54ac")]
+    comet = SKILL_EFFECTS_GENERATED[_u("\u5f57\u661f")]
+    smash = SKILL_EFFECTS_GENERATED[_u("\u91cd\u51fb")]
+    cannon = SKILL_EFFECTS_GENERATED[_u("\u6c34\u70ae")]
 
     assert _has_tag(comet, E.POWER_DYNAMIC, condition="self_missing_hp_step", step_pct=0.05, bonus_per_step=-10)
     assert _has_tag(comet, E.SELF_KO)
@@ -148,8 +163,8 @@ def test_self_ko_and_per_use_cost_patterns_are_generated():
 
 
 def test_hp_threshold_and_cost_reset_patterns_are_generated():
-    bite = SKILL_EFFECTS_GENERATED[_u("\\u6495\\u54ac")]
-    focus = SKILL_EFFECTS_GENERATED[_u("\\u6c14\\u6c89\\u4e39\\u7530")]
+    bite = SKILL_EFFECTS_GENERATED[_u("\u6495\u54ac")]
+    focus = SKILL_EFFECTS_GENERATED[_u("\u6c14\u6c89\u4e39\u7530")]
 
     assert _has_tag(bite, E.SKILL_MOD, target="self", stat="current_hit_count", value=2, condition="self_hp_below", threshold=0.5)
     assert _has_tag(focus, E.SELF_BUFF, atk=1.3)

@@ -154,6 +154,7 @@ def _effect_tag_text(tag) -> str:
         return "驱散印记"
     if t == E.CONDITIONAL_BUFF:
         return "条件增益"
+    # Legacy COUNTER_* tags (保留兼容)
     if t == E.COUNTER_ATTACK:
         base = "应对攻击"
         subs = getattr(tag, "sub_effects", None) or []
@@ -190,13 +191,30 @@ def _effect_tag_text(tag) -> str:
 
 def _skill_effect_display(skill) -> dict:
     """生成前端展示用的技能效果摘要。"""
+    from src.effect_models import SkillEffect as _SE, SkillTiming as _ST
     tags = []
     details = []
     if getattr(skill, "effects", None):
-        for tag in skill.effects:
-            text = _effect_tag_text(tag)
-            details.append(text)
-            tags.append(text.split("：", 1)[0])
+        for item in skill.effects:
+            if isinstance(item, _SE):
+                # SE 格式: 展示每个 EffectTag
+                prefix = ""
+                if item.timing == _ST.ON_COUNTER:
+                    cat = item.filter.get("category", "")
+                    cat_name = {"attack": "攻击", "status": "状态", "defense": "防御"}.get(cat, cat)
+                    prefix = f"应对{cat_name}："
+                for tag in item.effects:
+                    text = _effect_tag_text(tag)
+                    full = f"{prefix}{text}" if prefix else text
+                    details.append(full)
+                    tags.append(full.split("：", 1)[0] if prefix else text.split("：", 1)[0])
+                if not item.effects and prefix:
+                    details.append(prefix.rstrip("："))
+                    tags.append(prefix.rstrip("："))
+            else:
+                text = _effect_tag_text(item)
+                details.append(text)
+                tags.append(text.split("：", 1)[0])
 
     if skill.life_drain > 0:
         tags.append(f"吸血{int(skill.life_drain * 100)}%")
@@ -454,10 +472,17 @@ def _skill_tags(s):
     if s.is_mark:              tags.append("印记")
     # 从 effects 读取更多标签，避免 UI 只看到基础数值
     if hasattr(s, "effects") and s.effects:
-        for tag in s.effects:
-            text = _effect_tag_text(tag)
-            if text:
-                tags.append(text.split("：", 1)[0])
+        from src.effect_models import SkillEffect as _SE, SkillTiming as _ST
+        for item in s.effects:
+            if isinstance(item, _SE):
+                for tag in item.effects:
+                    text = _effect_tag_text(tag)
+                    if text:
+                        tags.append(text.split(":", 1)[0].split("：", 1)[0])
+            else:
+                text = _effect_tag_text(item)
+                if text:
+                    tags.append(text.split("：", 1)[0])
     return list(dict.fromkeys(tags))  # 去重保序
 
 
@@ -876,11 +901,17 @@ def _eff_preview(s) -> str:
     if s.charge:                 parts.append("（蓄力）")
     # effects 里的应对标签
     if hasattr(s, "effects") and s.effects:
-        from src.effect_models import E
-        for tag in s.effects:
-            if tag.type == E.COUNTER_ATTACK:  parts.append("[应对物/魔]")
-            if tag.type == E.COUNTER_DEFENSE: parts.append("[应对防御]")
-            if tag.type == E.COUNTER_STATUS:  parts.append("[应对变化]")
+        from src.effect_models import E, SkillEffect, SkillTiming
+        for item in s.effects:
+            if isinstance(item, SkillEffect) and item.timing == SkillTiming.ON_COUNTER:
+                cat = item.filter.get("category", "")
+                if cat == "attack":   parts.append("[应对物/魔]")
+                elif cat == "defense": parts.append("[应对防御]")
+                elif cat == "status":  parts.append("[应对变化]")
+            elif hasattr(item, "type"):
+                if item.type == E.COUNTER_ATTACK:  parts.append("[应对物/魔]")
+                if item.type == E.COUNTER_DEFENSE: parts.append("[应对防御]")
+                if item.type == E.COUNTER_STATUS:  parts.append("[应对变化]")
     return "  " + " | ".join(parts) if parts else ""
 
 
@@ -924,9 +955,12 @@ def _build_events(snap_before, snap_after, state, action_a, action_b, pa_before,
 
 def _has_counter(s) -> bool:
     if hasattr(s, "effects") and s.effects:
-        from src.effect_models import E
-        return any(t.type in (E.COUNTER_ATTACK, E.COUNTER_DEFENSE, E.COUNTER_STATUS)
-                   for t in s.effects)
+        from src.effect_models import E, SkillEffect, SkillTiming
+        for item in s.effects:
+            if isinstance(item, SkillEffect) and item.timing == SkillTiming.ON_COUNTER:
+                return True
+            if hasattr(item, "type") and item.type in (E.COUNTER_ATTACK, E.COUNTER_DEFENSE, E.COUNTER_STATUS):
+                return True
     return (s.counter_physical_power_mult > 0 or s.counter_defense_power_mult > 0
             or s.counter_status_power_mult > 0)
 

@@ -15,7 +15,7 @@
 import random
 from typing import List, Optional, Dict, Callable, TYPE_CHECKING
 
-from src.effect_models import E, EffectTag, Timing, AbilityEffect
+from src.effect_models import E, EffectTag, Timing, AbilityEffect, SkillTiming, SkillEffect
 
 if TYPE_CHECKING:
     from src.models import Pokemon, Skill, BattleState, SkillCategory
@@ -165,6 +165,17 @@ def _adjust_cost_delta(pokemon: "Pokemon", delta: int) -> int:
     return -delta if pokemon.ability_state.get("cost_invert") else delta
 
 
+def _iter_flat_tags_static(effects) -> list:
+    """从 List[SkillEffect] 或 List[EffectTag] 中提取所有 EffectTag（平铺）。"""
+    if not effects:
+        return
+    for item in effects:
+        if isinstance(item, SkillEffect):
+            yield from item.effects
+        else:
+            yield item
+
+
 def _check_runtime_condition(tag: EffectTag, ctx: Ctx) -> bool:
     condition = tag.params.get("condition", "")
     if not condition:
@@ -181,6 +192,104 @@ def _check_runtime_condition(tag: EffectTag, ctx: Ctx) -> bool:
         return ratio > threshold if condition == "enemy_hp_above" else ratio < threshold
     if condition == "enemy_switch":
         return bool(ctx.state.switch_this_turn_b if ctx.team == "a" else ctx.state.switch_this_turn_a)
+    return True
+
+
+def _check_skill_filter(filt: Dict, ctx: Ctx) -> bool:
+    """检查 SkillEffect 的 filter 条件是否满足。"""
+    if not filt:
+        return True
+
+    # 应对类别匹配（ON_COUNTER 阶段由 execute_counter_se 单独处理，此处跳过）
+    if "category" in filt:
+        return True
+
+    if filt.get("enemy_switch"):
+        enemy_switched = (
+            ctx.state.switch_this_turn_b if ctx.team == "a" else ctx.state.switch_this_turn_a
+        )
+        if not enemy_switched:
+            return False
+
+    if filt.get("first_strike"):
+        if not ctx.is_first:
+            return False
+
+    if "self_hp_lt" in filt:
+        ratio = ctx.user.current_hp / max(1, ctx.user.hp)
+        if ratio >= filt["self_hp_lt"]:
+            return False
+
+    if "self_hp_gt" in filt:
+        ratio = ctx.user.current_hp / max(1, ctx.user.hp)
+        if ratio <= filt["self_hp_gt"]:
+            return False
+
+    if "enemy_hp_lt" in filt:
+        ratio = ctx.target.current_hp / max(1, ctx.target.hp)
+        if ratio >= filt["enemy_hp_lt"]:
+            return False
+
+    if "enemy_hp_gt" in filt:
+        ratio = ctx.target.current_hp / max(1, ctx.target.hp)
+        if ratio <= filt["enemy_hp_gt"]:
+            return False
+
+    if filt.get("on_kill"):
+        if not ctx.target.is_fainted:
+            return False
+
+    if filt.get("energy_zero_after"):
+        if ctx.user.energy > 0:
+            return False
+
+    if filt.get("prev_counter_success"):
+        if ctx.user.ability_state.get("last_counter_success_turn") != ctx.state.turn - 1:
+            return False
+
+    if filt.get("counter"):
+        # counter 模式: 只在 execute_counter 上下文中生效
+        return True
+
+    if "per" in filt:
+        # per 条件由 handler 处理缩放逻辑，这里只判断是否有层数
+        per = filt["per"]
+        if per == "enemy_poison":
+            if ctx.target.poison_stacks <= 0:
+                return False
+        elif per == "enemy_burn":
+            if ctx.target.burn_stacks <= 0:
+                return False
+
+    if "self_hp_above" in filt:
+        threshold = float(filt["self_hp_above"])
+        start_hp = ctx.result.get("_user_hp_start", ctx.user.current_hp)
+        if start_hp / max(1, ctx.user.hp) <= threshold:
+            return False
+
+    if "self_hp_below" in filt:
+        threshold = float(filt["self_hp_below"])
+        start_hp = ctx.result.get("_user_hp_start", ctx.user.current_hp)
+        if start_hp / max(1, ctx.user.hp) >= threshold:
+            return False
+
+    if "prev_status" in filt:
+        if not (ctx.user.ability_state.get("last_skill_category") == "状态"
+                and ctx.user.ability_state.get("last_skill_turn") == ctx.state.turn - 1):
+            return False
+
+    if "self_missing_hp_step" in filt:
+        # 始终通过 — 实际缩放在 handler 里
+        pass
+
+    if "energy_cost_above_base" in filt:
+        # 始终通过 — 实际缩放在 handler 里
+        pass
+
+    if "per_enemy_poison" in filt:
+        if ctx.target.poison_stacks <= 0:
+            return False
+
     return True
 
 
@@ -612,15 +721,28 @@ def _h_drive(tag: EffectTag, ctx: Ctx) -> None:
     ability_filter = ctx.result.get("_ability_filter", {}) if isinstance(ctx.result, dict) else {}
     positions = ability_filter.get("positions", [])
 
-    # 位置型特性：把“传动”转成对应技能本体上的 DRIVE 标签，避免每回合重复叠加。
+    # 位置型特性：把"传动"转成对应技能本体上的 DRIVE 标签，避免每回合重复叠加。
     if ctx.skill is None and positions:
         for idx, skill in enumerate(ctx.user.skills):
             if idx not in positions:
                 continue
             if not getattr(skill, "effects", None):
                 skill.effects = []
-            if not any(tag.type == E.DRIVE and tag.params.get("value", 1) == value for tag in skill.effects):
-                skill.effects.append(EffectTag(E.DRIVE, {"value": value}))
+            # 兼容 SE 和 EffectTag 列表：检查是否已有 DRIVE
+            has_drive = False
+            for item in skill.effects:
+                if isinstance(item, SkillEffect):
+                    has_drive = has_drive or any(
+                        t.type == E.DRIVE and t.params.get("value", 1) == value
+                        for t in item.effects
+                    )
+                elif hasattr(item, "type") and item.type == E.DRIVE and item.params.get("value", 1) == value:
+                    has_drive = True
+            if not has_drive:
+                if skill.effects and isinstance(skill.effects[0], SkillEffect):
+                    skill.effects.append(SkillEffect(SkillTiming.POST_USE, [EffectTag(E.DRIVE, {"value": value})]))
+                else:
+                    skill.effects.append(EffectTag(E.DRIVE, {"value": value}))
         return
 
     ctx.result["_drive_value"] = value
@@ -849,8 +971,17 @@ def _h_ability_compute(tag: EffectTag, ctx: Ctx) -> None:
             if s.name in shared:
                 s.agility = True
                 if getattr(s, "effects", None):
-                    if not any(e.type == E.AGILITY for e in s.effects):
-                        s.effects.insert(0, EffectTag(E.AGILITY))
+                    if not any(e.type == E.AGILITY for e in _iter_flat_tags_static(s.effects)):
+                        if isinstance(s.effects[0], SkillEffect):
+                            # Insert AGILITY into the first ON_USE SE
+                            for se in s.effects:
+                                if se.timing == SkillTiming.ON_USE:
+                                    se.effects.insert(0, EffectTag(E.AGILITY))
+                                    break
+                            else:
+                                s.effects.insert(0, SkillEffect(SkillTiming.ON_USE, [EffectTag(E.AGILITY)]))
+                        else:
+                            s.effects.insert(0, EffectTag(E.AGILITY))
 
 
 def _h_ability_increment_counter(tag: EffectTag, ctx: Ctx) -> None:
@@ -888,7 +1019,9 @@ def _skill_matches_ability_filter(skill: "Skill", params: Dict) -> bool:
     if params.get("pure_attack"):
         if skill.power <= 0:
             return False
-        if not skill.effects or len(skill.effects) != 1 or skill.effects[0].type != E.DAMAGE:
+        # 兼容 SE 和 EffectTag: "纯攻击"= 只有 DAMAGE 效果
+        flat_tags = list(_iter_flat_tags_static(skill.effects)) if skill.effects else []
+        if not flat_tags or len(flat_tags) != 1 or flat_tags[0].type != E.DAMAGE:
             return False
 
     if "energy_cost_gt" in params and skill.energy_cost <= params["energy_cost_gt"]:
@@ -1145,6 +1278,32 @@ class EffectExecutor:
         user: "Pokemon",
         target: "Pokemon",
         skill: "Skill",
+        effects,
+        is_first: bool = False,
+        enemy_skill: "Skill" = None,
+        team: str = "a",
+    ) -> Dict:
+        """
+        执行技能的全部效果。
+        自动检测 effects 是 List[SkillEffect] 还是 List[EffectTag]，分别走新/旧路径。
+        """
+        if effects and isinstance(effects[0], SkillEffect):
+            return EffectExecutor._execute_skill_se(
+                state, user, target, skill, effects,
+                is_first=is_first, enemy_skill=enemy_skill, team=team,
+            )
+        # ── 旧格式: List[EffectTag] ──
+        return EffectExecutor._execute_skill_legacy(
+            state, user, target, skill, effects,
+            is_first=is_first, enemy_skill=enemy_skill, team=team,
+        )
+
+    @staticmethod
+    def _execute_skill_legacy(
+        state: "BattleState",
+        user: "Pokemon",
+        target: "Pokemon",
+        skill: "Skill",
         effects: List[EffectTag],
         is_first: bool = False,
         enemy_skill: "Skill" = None,
@@ -1195,7 +1354,198 @@ class EffectExecutor:
         return result
 
     # ────────────────────────────────────────
-    #  应对效果执行
+    #  新格式: SkillEffect 按阶段执行
+    # ────────────────────────────────────────
+
+    @staticmethod
+    def _execute_skill_se(
+        state: "BattleState",
+        user: "Pokemon",
+        target: "Pokemon",
+        skill: "Skill",
+        effects: List[SkillEffect],
+        is_first: bool = False,
+        enemy_skill: "Skill" = None,
+        team: str = "a",
+    ) -> Dict:
+        """按 SkillTiming 阶段顺序执行技能效果。"""
+        result = {
+            "damage": 0,
+            "interrupted": False,
+            "countered": False,
+            "force_switch": False,
+            "force_enemy_switch": False,
+            "counter_effects": [],
+            "_user_hp_start": user.current_hp,
+            "_target_hp_start": target.current_hp,
+        }
+        ctx = Ctx(
+            state=state, user=user, target=target, skill=skill,
+            result=result, is_first=is_first, team=team, enemy_skill=enemy_skill,
+        )
+
+        # 按 filter 中的 per 缩放: 注入到 ctx 上供 handler 使用
+        # 缩放因子在 PRE_USE 阶段计算一次
+
+        # ── 阶段1: PRE_USE ──
+        for se in effects:
+            if se.timing == SkillTiming.PRE_USE and _check_skill_filter(se.filter, ctx):
+                for tag in se.effects:
+                    _apply_tag(tag, ctx)
+
+        # ── 阶段2: IF (运行时条件 — 在伤害前，影响威力/连击数) ──
+        for se in effects:
+            if se.timing == SkillTiming.IF and _check_skill_filter(se.filter, ctx):
+                for tag in se.effects:
+                    _apply_tag(tag, ctx)
+
+        # ── 阶段3: ON_USE (主体伤害/状态) ──
+        #    DAMAGE 标签延后到其他 ON_USE 标签之后，确保威力修正先生效
+        on_use_damage = []
+        for se in effects:
+            if se.timing == SkillTiming.ON_USE:
+                for tag in se.effects:
+                    if tag.type == E.DAMAGE:
+                        on_use_damage.append(tag)
+                    else:
+                        _apply_tag(tag, ctx)
+        for tag in on_use_damage:
+            _apply_tag(tag, ctx)
+
+        # ── 阶段4: ON_HIT (仅有伤害时) ──
+        if result.get("damage", 0) > 0:
+            for se in effects:
+                if se.timing == SkillTiming.ON_HIT and _check_skill_filter(se.filter, ctx):
+                    for tag in se.effects:
+                        _apply_tag(tag, ctx)
+
+        # ── 阶段5: ON_COUNTER (收集，由 battle.py 在应对时执行) ──
+        for se in effects:
+            if se.timing == SkillTiming.ON_COUNTER:
+                result["counter_effects"].append(se)
+
+        # ── 阶段6: POST_USE ──
+        for se in effects:
+            if se.timing == SkillTiming.POST_USE:
+                for tag in se.effects:
+                    _apply_tag(tag, ctx)
+
+        # ── 吸血结算 ──
+        total_drain = result.get("_life_drain_pct", 0.0) + getattr(user, "life_drain_mod", 0.0)
+        if total_drain > 0 and result.get("damage", 0) > 0:
+            heal = int(result["damage"] * total_drain)
+            user.current_hp = min(user.hp, user.current_hp + heal)
+
+        # ── 后处理 ──
+        for buff in result.pop("_post_use_self_buffs", []):
+            _apply_buff(user, buff)
+        if result.get("_consume_next_attack_mod"):
+            user.next_attack_power_bonus = 0
+            user.next_attack_power_pct = 0.0
+
+        return result
+
+    # ────────────────────────────────────────
+    #  新格式: 应对效果执行
+    # ────────────────────────────────────────
+
+    @staticmethod
+    def execute_counter_se(
+        state: "BattleState",
+        user: "Pokemon",
+        target: "Pokemon",
+        skill: "Skill",
+        counter_se: SkillEffect,
+        enemy_skill: "Skill",
+        damage: int,
+        team: str = "a",
+    ) -> Optional[Dict]:
+        """
+        执行新格式应对效果。
+        counter_se 是 SkillEffect(timing=ON_COUNTER, filter={"category": ...})
+        """
+        from src.models import SkillCategory
+
+        result = {
+            "final_damage": damage,
+            "interrupted": False,
+            "force_switch": False,
+            "force_enemy_switch": False,
+        }
+
+        # 按 filter["category"] 匹配
+        category = counter_se.filter.get("category", "")
+        matched = False
+        if category == "attack":
+            matched = enemy_skill.category in (SkillCategory.PHYSICAL, SkillCategory.MAGICAL)
+        elif category == "status":
+            matched = enemy_skill.category == SkillCategory.STATUS
+        elif category == "defense":
+            matched = enemy_skill.category == SkillCategory.DEFENSE
+        elif not category:
+            # 无类别限制 = 全匹配
+            matched = True
+
+        if not matched:
+            return None
+
+        # 应对成功：更新计数
+        if team == "a":
+            state.counter_count_a += 1
+        else:
+            state.counter_count_b += 1
+
+        ctx = Ctx(
+            state=state, user=user, target=target, skill=skill,
+            result=result, team=team, enemy_skill=enemy_skill, damage=damage,
+        )
+
+        for tag in counter_se.effects:
+            if tag.type == E.INTERRUPT:
+                result["interrupted"] = True
+            elif tag.type == E.FORCE_SWITCH:
+                result["force_switch"] = True
+            elif tag.type == E.FORCE_ENEMY_SWITCH:
+                result["force_enemy_switch"] = True
+            elif tag.type == E.PASSIVE_ENERGY_REDUCE:
+                _h_passive_energy_reduce_water_ring(tag, ctx)
+            else:
+                _apply_tag(tag, ctx)
+
+        # 如果应对中有伤害/威力修正，重新计算伤害
+        if any(key in result for key in ("_power_bonus", "_power_mult", "_hit_count_bonus", "_hit_count_mult")):
+            from src.battle import DamageCalculator
+            weather = getattr(state, "weather", None)
+            power = (
+                skill.power
+                + user.skill_power_bonus
+                + user.next_attack_power_bonus
+                + result.get("_power_bonus", 0)
+            )
+            power_mult = (
+                1.0
+                + user.skill_power_pct_mod
+                + user.next_attack_power_pct
+                + (result.get("_power_mult", 1.0) - 1.0)
+            )
+            if power_mult != 1.0:
+                power = int(power * power_mult)
+            hit_count = max(
+                1,
+                int(
+                    (skill.hit_count + user.hit_count_mod + result.get("_hit_count_bonus", 0))
+                    * result.get("_hit_count_mult", 1.0)
+                ),
+            )
+            result["final_damage"] = DamageCalculator.calculate(
+                user, target, skill,
+                power_override=power, weather=weather, hit_count_override=hit_count,
+            )
+
+        return result
+
+    # ────────────────────────────────────────
+    #  应对效果执行 (旧格式)
     # ────────────────────────────────────────
 
     @staticmethod
@@ -1204,14 +1554,19 @@ class EffectExecutor:
         user: "Pokemon",
         target: "Pokemon",
         skill: "Skill",
-        counter_tag: EffectTag,
+        counter_tag,
         enemy_skill: "Skill",
         damage: int,
         team: str = "a",
     ) -> Optional[Dict]:
         """
-        执行应对效果。子效果复用同一套 _apply_tag，无重复逻辑。
+        执行应对效果。自动检测新格式（SkillEffect）或旧格式（EffectTag）。
         """
+        if isinstance(counter_tag, SkillEffect):
+            return EffectExecutor.execute_counter_se(
+                state, user, target, skill, counter_tag, enemy_skill, damage, team,
+            )
+        # ── 旧格式: EffectTag 容器 ──
         from src.models import SkillCategory
 
         result = {
@@ -1354,7 +1709,7 @@ class EffectExecutor:
                     _execute_agility_old(pokemon, enemy, skill)
                 continue
 
-            has_agility = any(e.type == E.AGILITY for e in skill.effects)
+            has_agility = any(e.type == E.AGILITY for e in _iter_flat_tags_static(skill.effects))
             if has_agility and pokemon.energy >= skill.energy_cost:
                 pokemon.energy -= skill.energy_cost
                 EffectExecutor.execute_skill(
@@ -1391,7 +1746,7 @@ class EffectExecutor:
         if not getattr(target_skill, "effects", None):
             return
 
-        for tag in target_skill.effects:
+        for tag in _iter_flat_tags_static(target_skill.effects):
             if tag.type == E.PASSIVE_ENERGY_REDUCE:
                 reduce = tag.params.get("reduce", 0)
                 rng = tag.params.get("range", "self")

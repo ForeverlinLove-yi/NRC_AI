@@ -13,9 +13,27 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.battle import DamageCalculator, execute_full_turn, _is_first_action
 from src.effect_engine import EffectExecutor
-from src.effect_models import E, EffectTag
+from src.effect_models import E, EffectTag, SkillEffect, SkillTiming
 from src.models import BattleState, Pokemon, Skill, SkillCategory, Type
 from src.skill_db import get_skill, load_skills
+
+
+_COUNTER_CAT_MAP = {
+    "attack": {E.COUNTER_ATTACK},
+    "status": {E.COUNTER_STATUS},
+    "defense": {E.COUNTER_DEFENSE},
+}
+
+
+def _find_counter(effects, category):
+    """Find a counter effect (SE or legacy EffectTag) matching category."""
+    for item in effects:
+        if isinstance(item, SkillEffect):
+            if item.timing == SkillTiming.ON_COUNTER and item.filter.get("category") == category:
+                return item
+        elif hasattr(item, "type") and item.type in _COUNTER_CAT_MAP.get(category, set()):
+            return item
+    raise StopIteration(f"No counter with category={category} found")
 
 
 def _u(raw):
@@ -190,7 +208,12 @@ def test_priority_effect_handler_updates_runtime_state():
 def test_counter_interrupt_metadata_is_returned():
     load_skills()
     interrupt_skill = get_skill("阻断")
-    counter_tag = next(tag for tag in interrupt_skill.effects if tag.type == E.COUNTER_STATUS)
+    # 阻断 now uses SE format — find the ON_COUNTER SkillEffect
+    from src.effect_models import SkillEffect as _SE, SkillTiming as _ST
+    counter_tag = next(
+        se for se in interrupt_skill.effects
+        if isinstance(se, _SE) and se.timing == _ST.ON_COUNTER
+    )
 
     user = make_pokemon("blocker", skills=[interrupt_skill], speed=120)
     enemy = make_pokemon(
@@ -232,7 +255,7 @@ def test_triple_break_applies_attack_and_hit_count_runtime_mods():
 def test_quick_move_upgrades_speed_when_countering_defense():
     load_skills()
     quick_move = get_skill("快速移动")
-    counter_tag = next(tag for tag in quick_move.effects if tag.type == E.COUNTER_DEFENSE)
+    counter_tag = _find_counter(quick_move.effects, "defense")
     defense_skill = make_skill("guard", power=0, energy=0, category=SkillCategory.DEFENSE)
 
     user = make_pokemon("speed_user", skills=[quick_move], speed=120)
@@ -257,7 +280,7 @@ def test_quick_move_upgrades_speed_when_countering_defense():
 def test_mental_disruption_upgrades_cost_penalty_when_countering_defense():
     load_skills()
     disrupt = get_skill("精神扰乱")
-    counter_tag = next(tag for tag in disrupt.effects if tag.type == E.COUNTER_DEFENSE)
+    counter_tag = _find_counter(disrupt.effects, "defense")
     defense_skill = make_skill("guard", power=0, energy=0, category=SkillCategory.DEFENSE)
     enemy_attack = make_skill("beam", power=90, energy=3, category=SkillCategory.MAGICAL, effects=[EffectTag(E.DAMAGE)])
 
@@ -370,7 +393,7 @@ def test_enemy_switch_hit_count_bonus_applies_to_ambush():
 def test_counter_status_hit_count_multiplier_applies_to_multi_hit_skill():
     load_skills()
     claws = get_skill("连续爪击")
-    counter_tag = next(tag for tag in claws.effects if tag.type == E.COUNTER_STATUS)
+    counter_tag = _find_counter(claws.effects, "status")
     status_skill = make_skill("status", power=0, energy=0, category=SkillCategory.STATUS)
 
     user = make_pokemon("clawer", attack=150, ptype=Type.FIGHTING, skills=[claws], speed=120)
