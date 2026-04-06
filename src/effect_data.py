@@ -855,4 +855,45 @@ ABILITY_EFFECTS = {
         ]),
     ],
 
+    
+    # ── Healing/Sustain (2) ──
+    "生长": [
+        AE(Timing.ON_TURN_END, [
+            T(E.HEAL_PER_TURN, heal_pct=0.12)
+        ]),
+    ],
+    
+    "深层氧循环": [
+        AE(Timing.ON_USE_SKILL, [
+            T(E.HEAL_ON_GRASS_SKILL, heal_pct=0.15)
+        ]),
+    ],
+    
+    # ── Energy Cost Modification (1) ──
+    "缩壳": [
+        AE(Timing.PASSIVE, [
+            T(E.SKILL_COST_REDUCTION_TYPE, cost_reduction=2)
+        ]),
+    ],
+    
+    # ── Status Application (2) ──
+    "毒牙": [
+        AE(Timing.ON_USE_SKILL, [
+            T(E.POISON_STAT_DEBUFF, spatk_reduction=0.4, spdef_reduction=0.4)
+        ]),
+    ],
+    
+    "毒腺": [
+        AE(Timing.ON_USE_SKILL, [
+            T(E.POISON_ON_SKILL_APPLY, poison_stacks=4, cost_threshold=5)
+        ]),
+    ],
+    
+    # ── Entry Effects (1) ──
+    "吉利丁片": [
+        AE(Timing.ON_ENTER, [
+            T(E.FREEZE_IMMUNITY_AND_BUFF, def_bonus=0.2)
+        ]),
+    ],
+
 }

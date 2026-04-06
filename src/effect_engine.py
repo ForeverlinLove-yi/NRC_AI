@@ -1704,6 +1704,99 @@ def _h_damage_resist_same_type(tag: EffectTag, ctx: Ctx) -> None:
             ctx.result["damage_reduction"] = 0
         ctx.result["damage_reduction"] += resist_pct
 
+
+# ── Healing/Sustain (2) ──
+
+def _h_heal_per_turn(tag: EffectTag, ctx: Ctx) -> None:
+    """HEAL_PER_TURN: 生长 - Recover 12% per turn"""
+    if not ctx.user:
+        return
+    heal_pct = tag.params.get("heal_pct", 0.12)
+    heal_amount = int(ctx.user.max_hp * heal_pct)
+    ctx.user.hp = min(ctx.user.hp + heal_amount, ctx.user.max_hp)
+    if ctx.user.hp != ctx.user.max_hp:
+        ctx.logs.append(f"{ctx.user.name} recovered {heal_amount} HP (生长)")
+
+
+def _h_heal_on_grass_skill(tag: EffectTag, ctx: Ctx) -> None:
+    """HEAL_ON_GRASS_SKILL: 深层氧循环 - Recover 15% on grass skill"""
+    if not ctx.user or not ctx.skill:
+        return
+    from src.types import Type
+    if ctx.skill.type != Type.GRASS:
+        return
+    heal_pct = tag.params.get("heal_pct", 0.15)
+    heal_amount = int(ctx.user.max_hp * heal_pct)
+    ctx.user.hp = min(ctx.user.hp + heal_amount, ctx.user.max_hp)
+    ctx.logs.append(f"{ctx.user.name} recovered {heal_amount} HP via grass skill (深层氧循环)")
+
+
+# ── Energy Cost Modification (1) ──
+
+def _h_skill_cost_reduction_type(tag: EffectTag, ctx: Ctx) -> None:
+    """SKILL_COST_REDUCTION_TYPE: 缩壳 - -2 cost on defense skills"""
+    if not ctx.skill:
+        return
+    # Check if skill is defensive type (category == "防御")
+    skill_category = getattr(ctx.skill, 'category', None)
+    if skill_category != "防御":
+        return
+    cost_reduction = tag.params.get("cost_reduction", 2)
+    if "cost_reduction" not in ctx.result:
+        ctx.result["cost_reduction"] = 0
+    ctx.result["cost_reduction"] += cost_reduction
+
+
+# ── Status Application (2) ──
+
+def _h_poison_stat_debuff(tag: EffectTag, ctx: Ctx) -> None:
+    """POISON_STAT_DEBUFF: 毒牙 - Poison = -40% spatk/spdef"""
+    if not ctx.user:
+        return
+    # Check if enemy has poison status
+    if ctx.user.status != "POISON":
+        return
+    spatk_reduction = tag.params.get("spatk_reduction", 0.4)
+    spdef_reduction = tag.params.get("spdef_reduction", 0.4)
+    if "spatk_reduction" not in ctx.result:
+        ctx.result["spatk_reduction"] = 0
+    if "spdef_reduction" not in ctx.result:
+        ctx.result["spdef_reduction"] = 0
+    ctx.result["spatk_reduction"] += spatk_reduction
+    ctx.result["spdef_reduction"] += spdef_reduction
+    ctx.logs.append(f"{ctx.user.name}'s Sp. ATK and Sp. DEF reduced by poison (毒牙)")
+
+
+def _h_poison_on_skill_apply(tag: EffectTag, ctx: Ctx) -> None:
+    """POISON_ON_SKILL_APPLY: 毒腺 - 4-layer poison on low-cost"""
+    if not ctx.user or not ctx.skill:
+        return
+    # Apply poison if skill cost < threshold (default 5)
+    cost_threshold = tag.params.get("cost_threshold", 5)
+    if ctx.skill.cost >= cost_threshold:
+        return
+    poison_stacks = tag.params.get("poison_stacks", 4)
+    ctx.user.apply_status("POISON", stacks=poison_stacks)
+    ctx.logs.append(f"{ctx.user.name} was poisoned by low-cost skill (毒腺)")
+
+
+# ── Entry Effects (1) ──
+
+def _h_freeze_immunity_and_buff(tag: EffectTag, ctx: Ctx) -> None:
+    """FREEZE_IMMUNITY_AND_BUFF: 吉利丁片 - +20% defense, freeze immune"""
+    if not ctx.user:
+        return
+    # Apply defense buff
+    def_bonus = tag.params.get("def_bonus", 0.2)
+    if "def_buff" not in ctx.user.ability_state:
+        ctx.user.ability_state["def_buff"] = 0
+    ctx.user.ability_state["def_buff"] += def_bonus
+    # Mark as freeze immune
+    if "freeze_immune" not in ctx.user.ability_state:
+        ctx.user.ability_state["freeze_immune"] = True
+    ctx.logs.append(f"{ctx.user.name} gained +{int(def_bonus*100)}% defense and freeze immunity (吉利丁片)")
+
+
 _HANDLERS: Dict[E, Callable] = {
     E.DAMAGE:                   _h_damage,
     E.SELF_BUFF:                _h_self_buff,
@@ -1813,6 +1906,12 @@ _HANDLERS: Dict[E, Callable] = {
     E.DAMAGE_MOD_POLLUTANT_BLOOD:        _h_damage_mod_pollutant_blood,
     E.DAMAGE_MOD_LEADER_BLOOD:           _h_damage_mod_leader_blood,
     E.DAMAGE_RESIST_SAME_TYPE:           _h_damage_resist_same_type,
+    E.HEAL_PER_TURN:                 _h_heal_per_turn,
+    E.HEAL_ON_GRASS_SKILL:           _h_heal_on_grass_skill,
+    E.SKILL_COST_REDUCTION_TYPE:     _h_skill_cost_reduction_type,
+    E.POISON_STAT_DEBUFF:            _h_poison_stat_debuff,
+    E.POISON_ON_SKILL_APPLY:         _h_poison_on_skill_apply,
+    E.FREEZE_IMMUNITY_AND_BUFF:      _h_freeze_immunity_and_buff,
 }
 
 # 特性中部分 handler 与技能略有不同，按 tag type 覆盖
@@ -1862,6 +1961,12 @@ _ABILITY_HANDLER_OVERRIDES: Dict[E, Callable] = {
     E.DAMAGE_MOD_POLLUTANT_BLOOD:        _h_damage_mod_pollutant_blood,
     E.DAMAGE_MOD_LEADER_BLOOD:           _h_damage_mod_leader_blood,
     E.DAMAGE_RESIST_SAME_TYPE:           _h_damage_resist_same_type,
+    E.HEAL_PER_TURN:                 _h_heal_per_turn,
+    E.HEAL_ON_GRASS_SKILL:           _h_heal_on_grass_skill,
+    E.SKILL_COST_REDUCTION_TYPE:     _h_skill_cost_reduction_type,
+    E.POISON_STAT_DEBUFF:            _h_poison_stat_debuff,
+    E.POISON_ON_SKILL_APPLY:         _h_poison_on_skill_apply,
+    E.FREEZE_IMMUNITY_AND_BUFF:      _h_freeze_immunity_and_buff,
 }
 
 

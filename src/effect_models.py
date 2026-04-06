@@ -172,6 +172,21 @@ class E(Enum):
     DAMAGE_MOD_POLLUTANT_BLOOD = auto()          # 天通地明: +100% vs pollutant blood params: {"bonus_pct": 1.0}
     DAMAGE_MOD_LEADER_BLOOD = auto()             # 月光审判: +100% vs leader blood params: {"bonus_pct": 1.0}
     DAMAGE_RESIST_SAME_TYPE = auto()             # 偏振: -40% from same-type attacks params: {"resist_pct": 0.4}
+
+    # Healing/Sustain (2)
+    HEAL_PER_TURN = auto()                       # 生长: Recover 12% per turn params: {"heal_pct": 0.12}
+    HEAL_ON_GRASS_SKILL = auto()                 # 深层氧循环: Recover 15% on grass skill params: {"heal_pct": 0.15}
+    
+    # Energy Cost Modification (1)
+    SKILL_COST_REDUCTION_TYPE = auto()           # 缩壳: -2 cost on defense skills params: {"cost_reduction": 2, "skill_type": "defense"}
+    
+    # Status Application (2)
+    POISON_STAT_DEBUFF = auto()                  # 毒牙: Poison = -40% spatk/spdef params: {"spatk_reduction": 0.4, "spdef_reduction": 0.4}
+    POISON_ON_SKILL_APPLY = auto()               # 毒腺: 4-layer poison on low-cost params: {"poison_stacks": 4, "cost_threshold": 5}
+    
+    # Entry Effects (1)
+    FREEZE_IMMUNITY_AND_BUFF = auto()            # 吉利丁片: +20% defense, freeze immune params: {"def_bonus": 0.2}
+
 # 触发时机枚举 (用于特性)
 # ============================================================
 class Timing(Enum):
