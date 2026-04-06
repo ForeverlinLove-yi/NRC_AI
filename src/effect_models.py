@@ -236,6 +236,11 @@ class E(Enum):
     IMMUNE_ZERO_ENERGY_ATTACKER = auto()  # 惊吓: 能量=0的精灵无法对自己造伤  params: {}
     IMMUNE_LOW_COST_ATTACK = auto()     # 逐魂鸟: 能耗≤1的攻击技能无法对自己造伤  params: {"cost_threshold": 1}
     ENTRY_SELF_DAMAGE = auto()          # 铃兰晚钟: 入场时失去一半当前HP  params: {}
+    ENERGY_DRAIN_BY_COST_DIFF = auto()  # 石天平: 回合结束敌方失去"己方本回合技能能耗-敌方能耗"的能量  params: {}
+    ENTRY_BUFF_PER_SKILL_COUNT = auto()  # 全局计数特性: 入场时按己方技能使用次数给加成
+                                          # params: {"count_key":"水"|"状态"|..., "per_count":{...效果描述}}
+                                          # per_count 支持: cost_reduce(int), power_pct(float), buff(dict), grant_agility(bool)
+                                          # element_filter: 只对某系技能生效
 
 
 # ============================================================

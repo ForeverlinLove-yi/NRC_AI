@@ -909,8 +909,8 @@ async def receive_player_action(ws: WebSocket, msg: dict):
     # ── 执行回合 ──
     snap_before = _snapshot(state)
     # 清除上回合的聚能日志
-    if hasattr(state, "_energy_recharge_log"):
-        state._energy_recharge_log.clear()
+    if state.energy_recharge_log:
+        state.energy_recharge_log.clear()
     try:
         execute_full_turn(state, action_a, action_b, _ai_switch_callback, _ai_switch_callback)
     except Exception as e:
@@ -926,7 +926,7 @@ async def receive_player_action(ws: WebSocket, msg: dict):
     snap_after  = _snapshot(state)
 
     # ── 聚能提示 ──
-    for ev in getattr(state, "_energy_recharge_log", []):
+    for ev in state.energy_recharge_log:
         side_str = "🧑 你" if ev["team"] == "a" else "🤖 AI"
         session.add_log(
             f"  ⚡ {side_str}方 {ev['pokemon']} 能量不足（需{ev['needed']}，有{ev['had']}），"
@@ -957,9 +957,9 @@ async def receive_player_action(ws: WebSocket, msg: dict):
     events = _build_events(snap_before, snap_after, state, action_a, action_b, pa, pb)
 
     # ── 处理应对触发的强制换人（泡沫幻影等） ──
-    pending = getattr(state, "_pending_switch_requests", [])
+    pending = state.pending_switch_requests
     if pending:
-        state._pending_switch_requests = []
+        state.pending_switch_requests = []
         for req in pending:
             if req["team"] == "a":
                 # 玩家方需要手动选择

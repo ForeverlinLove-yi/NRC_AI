@@ -72,8 +72,9 @@ def load_skills(csv_path: str = None) -> dict:
     except ImportError:
         GENERATED = {}
 
-    # 合并：手动配置覆盖生成配置
-    all_effects = {**GENERATED, **MANUAL}
+    # 合并：手动配置覆盖生成配置，过滤生成文件中的空列表
+    all_effects = {k: v for k, v in GENERATED.items() if v}
+    all_effects.update(MANUAL)
 
     conn = _get_conn()
     c = conn.cursor()
@@ -160,4 +161,20 @@ def load_ability_effects(ability_str: str) -> list:
         return []
 
     name = ability_str.split(":")[0].split("：")[0].strip()
-    return ABILITY_EFFECTS.get(name, [])
+    effects = ABILITY_EFFECTS.get(name, [])
+
+    # 检测空占位特性（SELF_BUFF(atk=0) 等静默无效的配置）
+    if effects:
+        from src.effect_models import E
+        all_noop = all(
+            len(ae.effects) == 1
+            and ae.effects[0].type == E.SELF_BUFF
+            and ae.effects[0].params.get("atk", None) == 0
+            and len(ae.effects[0].params) == 1
+            for ae in effects
+        )
+        if all_noop:
+            import sys
+            print(f"[WARN] 特性 '{name}' 是空占位 (SELF_BUFF atk=0)，对战时无实际效果", file=sys.stderr)
+
+    return effects

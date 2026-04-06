@@ -442,6 +442,23 @@ class BattleState:
     switch_this_turn_b: bool = False
     battle_start_effects_triggered: bool = False
 
+    # 天气持续回合 (由 _h_weather 设置)
+    weather_turns: int = 0
+
+    # 沙暴天气下的原始技能能耗备份 (id(skill) -> original_cost)
+    sandstorm_original_costs: Dict[int, int] = field(default_factory=dict)
+
+    # 聚能事件日志 (供 server.py 战斗播报使用)
+    energy_recharge_log: list = field(default_factory=list)
+
+    # 待处理的换人请求 (脱离/强制换人时暂存，由 server.py 让玩家选择)
+    pending_switch_requests: list = field(default_factory=list)
+
+    # 全局技能使用计数 (按队伍分开)
+    # 结构: {"a": {"水": 3, "火": 1, "状态": 5, "防御": 2, ...}, "b": {...}}
+    skill_use_counts_a: Dict[str, int] = field(default_factory=dict)
+    skill_use_counts_b: Dict[str, int] = field(default_factory=dict)
+
     def get_current(self, team: str) -> Pokemon:
         if team == "a":
             return self.team_a[self.current_a]
@@ -460,5 +477,11 @@ class BattleState:
             switch_this_turn_a=self.switch_this_turn_a,
             switch_this_turn_b=self.switch_this_turn_b,
             battle_start_effects_triggered=self.battle_start_effects_triggered,
+            weather_turns=self.weather_turns,
+            sandstorm_original_costs=dict(self.sandstorm_original_costs),
+            energy_recharge_log=[],
+            pending_switch_requests=[],
+            skill_use_counts_a=dict(self.skill_use_counts_a),
+            skill_use_counts_b=dict(self.skill_use_counts_b),
         )
         return bs

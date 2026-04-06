@@ -1061,9 +1061,10 @@ ABILITY_EFFECTS = {
         AE(Timing.ON_ENTER, [T(E.CONDITIONAL_ENTRY_BUFF_MP, mp_value=1, _params={"buff": {"atk": 0.5, "spatk": 0.5}})]),
     ],
 
-    # 蒸汽膨胀 (3只): 入场时双攻+10%（简化）
+    # 蒸汽膨胀 (3只): 己方每用1次火系技能，入场时全技能威力+10
     "蒸汽膨胀": [
-        AE(Timing.ON_ENTER, [T(E.SELF_BUFF, atk=0.1, spatk=0.1)]),
+        AE(Timing.ON_ENTER, [T(E.ENTRY_BUFF_PER_SKILL_COUNT,
+            count_key="火", _params={"per_count": {"power_bonus": 10}})]),
     ],
 
     # 搜刮 (3只): 敌方换人时自己魔攻+20%
@@ -1111,14 +1112,14 @@ ABILITY_EFFECTS = {
         AE(Timing.ON_TURN_END, [T(E.HEAL_HP, pct=0.05)]),
     ],
 
-    # 耐活王 (4只): 每回合回3%HP（近似敌方中毒回复）
+    # 耐活王 (4只): 敌方每有1层中毒，己方回复3%HP
     "耐活王": [
-        AE(Timing.ON_TURN_END, [T(E.HEAL_HP, pct=0.03)]),
+        AE(Timing.ON_TURN_END, [T(E.HEAL_HP, pct=0.03, per="enemy_poison")]),
     ],
 
-    # 仁心 (3只): 每回合回4%HP（近似敌方灼烧回复）
+    # 仁心 (3只): 敌方每有1层灼烧，己方回复4%HP
     "仁心": [
-        AE(Timing.ON_TURN_END, [T(E.HEAL_HP, pct=0.04)]),
+        AE(Timing.ON_TURN_END, [T(E.HEAL_HP, pct=0.04, per="enemy_burn")]),
     ],
 
     # 血型吸引 (2只): 敌方每携带1种系别的技能，攻击时威力+10
@@ -1140,24 +1141,33 @@ ABILITY_EFFECTS = {
         AE(Timing.ON_ENTER, [T(E.SPECIFIC_SKILL_POWER_BONUS, skill_name="虫鸣", power_bonus=20)]),
     ],
 
-    # 拨浪鼓 (4只): 己方每用1次状态技能自己入场时毒/萌系技能威力+10
+    # 拨浪鼓 (4只): 己方每用1次状态技能，入场时毒/萌系技能威力+10
     "拨浪鼓": [
-        AE(Timing.ON_ENTER, [T(E.SELF_BUFF, atk=0.1, spatk=0.1)]),  # 简化为入场buff
+        AE(Timing.ON_ENTER, [T(E.ENTRY_BUFF_PER_SKILL_COUNT,
+            count_key="状态",
+            _params={"per_count": {"power_pct": 0.0, "power_bonus": 10},
+                     "element_filter": ["毒", "萌"]})]),
     ],
 
-    # 水翼推进 (3只): 己方每用1次水系技能自己入场时全技能能耗-1
+    # 水翼推进 (3只): 己方每用1次水系技能，入场时全技能能耗-1
     "水翼推进": [
-        AE(Timing.ON_ENTER, [T(E.ON_SKILL_ELEMENT_COST_REDUCE, element="水", reduce=1)]),  # 简化为入场减能耗
+        AE(Timing.ON_ENTER, [T(E.ENTRY_BUFF_PER_SKILL_COUNT,
+            count_key="水", _params={"per_count": {"cost_reduce": 1}})]),
     ],
 
-    # 定向精炼 (3只): 己方每用1次防御技能自己入场时机械/地系威力+10%
+    # 定向精炼 (3只): 己方每用1次防御技能，入场时机械/地系威力+10%
     "定向精炼": [
-        AE(Timing.ON_ENTER, [T(E.SELF_BUFF, atk=0.1, spatk=0.1)]),  # 简化
+        AE(Timing.ON_ENTER, [T(E.ENTRY_BUFF_PER_SKILL_COUNT,
+            count_key="防御",
+            _params={"per_count": {"power_pct": 0.1},
+                     "element_filter": ["机械", "地"]})]),
     ],
 
-    # 渗透 (2只): 己方每用1次武/地系技能自己入场时攻防+5%
+    # 渗透 (2只): 己方每用1次武/地系技能，入场时攻防+5%
     "渗透": [
-        AE(Timing.ON_ENTER, [T(E.SELF_BUFF, atk=0.05, _params={"def": 0.05})]),  # 简化
+        AE(Timing.ON_ENTER, [T(E.ENTRY_BUFF_PER_SKILL_COUNT,
+            _params={"count_keys": ["武", "地"],
+                     "per_count": {"buff": {"atk": 0.05, "def": 0.05}}})]),
     ],
 
     # 铃兰晚钟 (2只): 首次入场时失去一半当前HP
@@ -1172,7 +1182,7 @@ ABILITY_EFFECTS = {
 
     # 石天平 (2只): 技能能耗高于敌方时回合结束敌方失去能耗差的能量
     "石天平": [
-        AE(Timing.ON_TURN_END, [T(E.STEAL_ALL_ENEMY_ENERGY, amount=1)]),  # 简化为偷1能量
+        AE(Timing.ON_TURN_END, [T(E.ENERGY_DRAIN_BY_COST_DIFF)]),
     ],
 
     # 复方汤剂 (2只): 回合结束中毒触发次数+1
@@ -1214,7 +1224,7 @@ ABILITY_EFFECTS = {
 
     # 扫拖一体 (2只): 回合结束驱散敌方1层印记
     "扫拖一体": [
-        AE(Timing.ON_TURN_END, [T(E.DISPEL_ENEMY_MARKS)]),  # 简化为驱散全部
+        AE(Timing.ON_TURN_END, [T(E.DISPEL_ENEMY_MARKS, stacks=1)]),
     ],
 
     # 夺目 (1只): 非光系技能威力+25%
@@ -1226,22 +1236,26 @@ ABILITY_EFFECTS = {
 
     # 散热 (3只): 初始能量0，己方每放1次火系技能回3能量
     "散热": [
-        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, amount=3)]),  # 简化为入场回3能量
+        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, set_to=0)]),
+        AE(Timing.ON_USE_SKILL, [T(E.HEAL_ENERGY, amount=3)], element="火"),
     ],
 
     # 打雪仗 (3只): 初始能量0，己方每放1次冰系技能回3能量
     "打雪仗": [
-        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, amount=3)]),
+        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, set_to=0)]),
+        AE(Timing.ON_USE_SKILL, [T(E.HEAL_ENERGY, amount=3)], element="冰"),
     ],
 
     # 慢热型 (3只): 初始能量0，己方每成功应对1次回5能量
     "慢热型": [
-        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, amount=5)]),  # 简化
+        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, set_to=0)]),
+        AE(Timing.ON_COUNTER_SUCCESS, [T(E.HEAL_ENERGY, amount=5)]),
     ],
 
     # 地脉 (3只): 初始能量0，己方每放1次地系技能回3能量
     "地脉": [
-        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, amount=3)]),
+        AE(Timing.ON_ENTER, [T(E.HEAL_ENERGY, set_to=0)]),
+        AE(Timing.ON_USE_SKILL, [T(E.HEAL_ENERGY, amount=3)], element="地"),
     ],
 
     # 地脉馈赠 (1只): 突破能量上限+回10能量
@@ -1424,9 +1438,13 @@ ABILITY_EFFECTS = {
         AE(Timing.PASSIVE, [T(E.SELF_BUFF, atk=0)]),  # 血脉系统未实现，暂占位
     ],
 
-    # 水翼飞升 (1只): 己方每用1次水系技能入场能耗-1+能耗0威力+30%
+    # 水翼飞升 (1只): 己方每用1次水系技能，入场能耗-1 + 能耗为0的技能威力+30%
     "水翼飞升": [
-        AE(Timing.ON_ENTER, [T(E.ON_SKILL_ELEMENT_COST_REDUCE, element="水", reduce=1)]),  # 简化
+        AE(Timing.ON_ENTER, [T(E.ENTRY_BUFF_PER_SKILL_COUNT,
+            count_key="水", _params={"per_count": {"cost_reduce": 1}})]),
+        AE(Timing.ON_ENTER, [
+            T(E.ABILITY_COMPUTE, action="modify_matching_skills", power_pct=0.3, energy_cost_eq=0)
+        ]),
     ],
 
 }
