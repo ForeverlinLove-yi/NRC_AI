@@ -1157,6 +1157,58 @@ def _h_ability_compute(tag: EffectTag, ctx: Ctx) -> None:
                         else:
                             s.effects.insert(0, EffectTag(E.AGILITY))
 
+    elif action == "grant_first_skill_agility":
+        # 给第一个技能添加迅捷标记
+        if pokemon.skills:
+            first_skill = pokemon.skills[0]
+            first_skill.agility = True
+            # 如果技能有 effects 框架，添加 AGILITY 标记
+            if getattr(first_skill, "effects", None) and isinstance(first_skill.effects, list):
+                # 检查是否已有 AGILITY
+                has_agility = any(
+                    e.type == E.AGILITY for e in _iter_flat_tags_static(first_skill.effects)
+                )
+                if not has_agility:
+                    if isinstance(first_skill.effects[0], SkillEffect):
+                        for se in first_skill.effects:
+                            if se.timing == SkillTiming.ON_USE:
+                                se.effects.insert(0, EffectTag(E.AGILITY))
+                                break
+                        else:
+                            first_skill.effects.insert(0, SkillEffect(SkillTiming.ON_USE, [EffectTag(E.AGILITY)]))
+                    else:
+                        first_skill.effects.insert(0, EffectTag(E.AGILITY))
+
+    elif action == "first_strike_power_bonus":
+        # 标记 Pokemon 在先手时应用威力提升（需要在 battle.py 中检查并应用）
+        if not hasattr(pokemon, "ability_state"):
+            pokemon.ability_state = {}
+        pokemon.ability_state["first_strike_power_bonus"] = tag.params.get("bonus_pct", 0.0)
+
+    elif action == "first_strike_hit_bonus":
+        # 标记 Pokemon 在先手时应用连击数提升（需要在 battle.py 中检查并应用）
+        if not hasattr(pokemon, "ability_state"):
+            pokemon.ability_state = {}
+        pokemon.ability_state["first_strike_hit_bonus"] = True
+
+    elif action == "auto_switch_on_zero_energy":
+        # 标记能量为0时自动换人（需要在 battle.py 中检查并触发）
+        if not hasattr(pokemon, "ability_state"):
+            pokemon.ability_state = {}
+        pokemon.ability_state["auto_switch_zero_energy"] = True
+
+    elif action == "auto_switch_every_turn":
+        # 标记每回合末自动换人（需要在 battle.py 中检查并触发）
+        if not hasattr(pokemon, "ability_state"):
+            pokemon.ability_state = {}
+        pokemon.ability_state["auto_switch_every_turn"] = True
+
+    elif action == "swap_ally_on_zero_energy":
+        # 标记能量为0时替换队友入场（需要在 battle.py 中检查并触发）
+        if not hasattr(pokemon, "ability_state"):
+            pokemon.ability_state = {}
+        pokemon.ability_state["swap_ally_zero_energy"] = True
+
 
 def _h_ability_increment_counter(tag: EffectTag, ctx: Ctx) -> None:
     """ABILITY_INCREMENT_COUNTER: 海豹船长计数+1"""
@@ -1340,8 +1392,318 @@ def _h_cost_invert(tag: EffectTag, ctx: Ctx) -> None:
     """COST_INVERT: 对流 — 设置能耗反转被动标记"""
     ctx.user.ability_state["cost_invert"] = True
 
+# ── TIER 1 特性 handler ──
+
+def _h_counter_success_double_damage(tag: EffectTag, ctx: Ctx) -> None:
+    """COUNTER_SUCCESS_DOUBLE_DAMAGE: 应对成功后下一次伤害翻倍"""
+    if ctx.user and ctx.user.ability_state is not None:
+        ctx.user.ability_state["double_damage_next"] = True
+
+
+def _h_counter_success_buff_permanent(tag: EffectTag, ctx: Ctx) -> None:
+    """COUNTER_SUCCESS_BUFF_PERMANENT: 应对成功后获得永久增益"""
+    if not ctx.user or not ctx.user.ability_state:
+        return
+    
+    params = tag.params
+    if not ctx.user.ability_state.get("counter_buffs"):
+        ctx.user.ability_state["counter_buffs"] = {}
+    
+    # Merge buff params
+    if "atk" in params:
+        ctx.user.ability_state["counter_buffs"]["atk"] = params["atk"]
+    if "spatk" in params:
+        ctx.user.ability_state["counter_buffs"]["spatk"] = params["spatk"]
+    if "def" in params:
+        ctx.user.ability_state["counter_buffs"]["def"] = params["def"]
+    if "spdef" in params:
+        ctx.user.ability_state["counter_buffs"]["spdef"] = params["spdef"]
+    if "speed" in params:
+        ctx.user.ability_state["counter_buffs"]["speed"] = params["speed"]
+
+
+def _h_counter_success_power_bonus(tag: EffectTag, ctx: Ctx) -> None:
+    """COUNTER_SUCCESS_POWER_BONUS: 应对成功后威力永久+N（斗技）"""
+    if not ctx.user or not ctx.user.ability_state:
+        return
+    
+    delta = tag.params.get("delta", 20)
+    if "power_bonus" not in ctx.user.ability_state:
+        ctx.user.ability_state["power_bonus"] = 0
+    ctx.user.ability_state["power_bonus"] += delta
+
+
+def _h_counter_success_cost_reduce(tag: EffectTag, ctx: Ctx) -> None:
+    """COUNTER_SUCCESS_COST_REDUCE: 应对成功后能耗永久-N（思维之盾）"""
+    if not ctx.user or not ctx.user.ability_state:
+        return
+    
+    delta = tag.params.get("delta", 5)
+    if "cost_reduce" not in ctx.user.ability_state:
+        ctx.user.ability_state["cost_reduce"] = 0
+    ctx.user.ability_state["cost_reduce"] += delta
+
+
+def _h_counter_success_speed_priority(tag: EffectTag, ctx: Ctx) -> None:
+    """COUNTER_SUCCESS_SPEED_PRIORITY: 应对成功后速度优先级+1（野性感官）"""
+    if not ctx.user or not ctx.user.ability_state:
+        return
+    
+    if "speed_priority" not in ctx.user.ability_state:
+        ctx.user.ability_state["speed_priority"] = 0
+    ctx.user.ability_state["speed_priority"] += 1
+
+
+def _h_first_strike_power_bonus(tag: EffectTag, ctx: Ctx) -> None:
+    """FIRST_STRIKE_POWER_BONUS: 先手攻击威力加成（破空/顺风）"""
+    if not ctx.is_first:
+        return
+    
+    bonus_pct = tag.params.get("bonus_pct", 0.5)
+    if "power_multiplier" not in ctx.result:
+        ctx.result["power_multiplier"] = 1.0
+    ctx.result["power_multiplier"] *= (1.0 + bonus_pct)
+
+
+def _h_first_strike_hit_count(tag: EffectTag, ctx: Ctx) -> None:
+    """FIRST_STRIKE_HIT_COUNT: 先手攻击连击数+1（咔咔冲刺）"""
+    if not ctx.is_first:
+        return
+    
+    if not ctx.skill or not hasattr(ctx.skill, 'hit_count'):
+        return
+    
+    ctx.skill.hit_count += 1
+
+
+def _h_first_strike_agility(tag: EffectTag, ctx: Ctx) -> None:
+    """FIRST_STRIKE_AGILITY: 首个技能获得迅捷（起飞加速）"""
+    if not ctx.is_first:
+        return
+    
+    ctx.user.agility_tag = True
+
+
+def _h_auto_switch_on_zero_energy(tag: EffectTag, ctx: Ctx) -> None:
+    """AUTO_SWITCH_ON_ZERO_ENERGY: 能量为0时自动换人（警惕）"""
+    if ctx.user and ctx.user.energy <= 0:
+        ctx.user.force_switch = True
+
+
+def _h_auto_switch_after_action(tag: EffectTag, ctx: Ctx) -> None:
+    """AUTO_SWITCH_AFTER_ACTION: 每个回合结束后自动换人（防过载保护）"""
+    if ctx.user and ctx.user.ability_state is not None:
+        ctx.user.ability_state["auto_switch_eot"] = True
+
+
+
 
 # ── 注册表 ──
+
+# ──────────────────────────────────────────────
+# TIER 2 Handlers
+# ──────────────────────────────────────────────
+
+def _h_team_synergy_bug_swarm_attack(tag: EffectTag, ctx: Ctx) -> None:
+    """TEAM_SYNERGY_BUG_SWARM_ATTACK: 虫群突袭 - +15% stats per other bug"""
+    if not ctx.user or not ctx.battle:
+        return
+    # Count bugs in team (excluding self)
+    bug_count = 0
+    for mon in ctx.battle.user_team:
+        if mon and mon != ctx.user and mon.type1 == 9 or mon.type2 == 9:  # 9 = Bug type
+            bug_count += 1
+    bonus_pct = tag.params.get("bonus_pct", 0.15)
+    multiplier = 1.0 + (bonus_pct * bug_count)
+    if "stat_multiplier" not in ctx.result:
+        ctx.result["stat_multiplier"] = {}
+    ctx.result["stat_multiplier"]["all"] = multiplier
+
+
+def _h_team_synergy_bug_swarm_inspire(tag: EffectTag, ctx: Ctx) -> None:
+    """TEAM_SYNERGY_BUG_SWARM_INSPIRE: 虫群鼓舞 - +10% stats per other bug"""
+    if not ctx.user or not ctx.battle:
+        return
+    # Count bugs in team (excluding self)
+    bug_count = 0
+    for mon in ctx.battle.user_team:
+        if mon and mon != ctx.user and (mon.type1 == 9 or mon.type2 == 9):
+            bug_count += 1
+    bonus_pct = tag.params.get("bonus_pct", 0.1)
+    multiplier = 1.0 + (bonus_pct * bug_count)
+    if "stat_multiplier" not in ctx.result:
+        ctx.result["stat_multiplier"] = {}
+    ctx.result["stat_multiplier"]["all"] = multiplier
+
+
+def _h_team_synergy_brave_if_bugs(tag: EffectTag, ctx: Ctx) -> None:
+    """TEAM_SYNERGY_BRAVE_IF_BUGS: 壮胆 - +50% attack if bugs in team"""
+    if not ctx.user or not ctx.battle:
+        return
+    # Check if any other bug in team
+    has_bugs = any(mon and mon != ctx.user and (mon.type1 == 9 or mon.type2 == 9) for mon in ctx.battle.user_team)
+    if has_bugs:
+        bonus_pct = tag.params.get("bonus_pct", 0.5)
+        if "stat_multiplier" not in ctx.result:
+            ctx.result["stat_multiplier"] = {}
+        ctx.result["stat_multiplier"]["atk"] = 1.0 + bonus_pct
+
+
+def _h_team_synergy_bug_kill_aff(tag: EffectTag, ctx: Ctx) -> None:
+    """TEAM_SYNERGY_BUG_KILL_AFF: 振奋虫心 - +5 aff on team kill (ON_KILL)"""
+    if ctx.user and ctx.user.ability_state is not None:
+        aff_bonus = tag.params.get("aff_bonus", 5)
+        ctx.user.ability_state["aff_bonus"] = aff_bonus
+
+
+def _h_stat_scale_defense_per_energy(tag: EffectTag, ctx: Ctx) -> None:
+    """STAT_SCALE_DEFENSE_PER_ENERGY: 囤积 - +10% defense per energy"""
+    if not ctx.user:
+        return
+    bonus_pct_per_energy = tag.params.get("bonus_pct_per_energy", 0.1)
+    multiplier = 1.0 + (bonus_pct_per_energy * ctx.user.energy)
+    if "stat_multiplier" not in ctx.result:
+        ctx.result["stat_multiplier"] = {}
+    ctx.result["stat_multiplier"]["def"] = multiplier
+
+
+def _h_stat_scale_hits_per_hp_lost(tag: EffectTag, ctx: Ctx) -> None:
+    """STAT_SCALE_HITS_PER_HP_LOST: 嫁祸 - +2 hits per 25% HP lost"""
+    if not ctx.user:
+        return
+    max_hp = ctx.user.max_hp if ctx.user.max_hp > 0 else 1
+    hp_lost_pct = (max_hp - ctx.user.hp) / max_hp
+    quarters_lost = int(hp_lost_pct * 4)  # 0-4 quarters
+    hits_per_quarter = tag.params.get("hits_per_quarter", 2)
+    extra_hits = quarters_lost * hits_per_quarter
+    if "hit_count_bonus" not in ctx.result:
+        ctx.result["hit_count_bonus"] = 0
+    ctx.result["hit_count_bonus"] += extra_hits
+
+
+def _h_stat_scale_attack_decay(tag: EffectTag, ctx: Ctx) -> None:
+    """STAT_SCALE_ATTACK_DECAY: 全神贯注 - +100% attack, -20% per action"""
+    if not ctx.user or ctx.user.ability_state is None:
+        return
+    init_bonus = tag.params.get("init_bonus", 1.0)
+    decay_per_action = tag.params.get("decay_per_action", 0.2)
+    action_count = ctx.user.ability_state.get("action_count", 0)
+    bonus = init_bonus - (decay_per_action * action_count)
+    bonus = max(bonus, 0)  # Never go negative
+    if "stat_multiplier" not in ctx.result:
+        ctx.result["stat_multiplier"] = {}
+    ctx.result["stat_multiplier"]["atk"] = 1.0 + bonus
+
+
+def _h_stat_scale_meteor_marks_per_turn(tag: EffectTag, ctx: Ctx) -> None:
+    """STAT_SCALE_METEOR_MARKS_PER_TURN: 吸积盘 - +2 meteor marks per turn (ON_TURN_END)"""
+    if ctx.user and ctx.user.ability_state is not None:
+        marks_per_turn = tag.params.get("marks_per_turn", 2)
+        ctx.user.ability_state["meteor_mark_add"] = marks_per_turn
+
+
+def _h_mark_power_per_meteor(tag: EffectTag, ctx: Ctx) -> None:
+    """MARK_POWER_PER_METEOR: 坠星/观星 - +15% power per meteor mark"""
+    if not ctx.enemy or not ctx.battle:
+        return
+    # Get meteor mark count on enemy
+    meteor_count = ctx.enemy.marks.get("meteor", 0) if ctx.enemy.marks else 0
+    bonus_pct_per_mark = tag.params.get("bonus_pct_per_mark", 0.15)
+    multiplier = 1.0 + (bonus_pct_per_mark * meteor_count)
+    if "power_multiplier" not in ctx.result:
+        ctx.result["power_multiplier"] = 1.0
+    ctx.result["power_multiplier"] *= multiplier
+
+
+def _h_mark_freeze_to_meteor(tag: EffectTag, ctx: Ctx) -> None:
+    """MARK_FREEZE_TO_METEOR: 月牙雪糕 - Freeze = meteor mark"""
+    if ctx.user and ctx.user.ability_state is not None:
+        ctx.user.ability_state["freeze_becomes_meteor"] = True
+
+
+def _h_mark_stack_no_replace(tag: EffectTag, ctx: Ctx) -> None:
+    """MARK_STACK_NO_REPLACE: 吟游之弦 - Marks stack (don't replace)"""
+    if ctx.user and ctx.user.ability_state is not None:
+        ctx.user.ability_state["mark_stack_additive"] = True
+
+
+def _h_mark_stack_debuffs(tag: EffectTag, ctx: Ctx) -> None:
+    """MARK_STACK_DEBUFFS: 灰色肖像 - Stack enemy debuffs +3"""
+    if ctx.enemy and ctx.enemy.ability_state is not None:
+        stack_bonus = tag.params.get("stack_bonus", 3)
+        ctx.enemy.ability_state["debuff_stack_bonus"] = stack_bonus
+
+
+def _h_damage_mod_non_stab(tag: EffectTag, ctx: Ctx) -> None:
+    """DAMAGE_MOD_NON_STAB: 涂鸦 - +50% non-STAB power"""
+    if not ctx.user or not ctx.skill:
+        return
+    # Check if skill is STAB (same type as either of user's types)
+    if ctx.skill.type not in (ctx.user.type1, ctx.user.type2):
+        bonus_pct = tag.params.get("bonus_pct", 0.5)
+        if "power_multiplier" not in ctx.result:
+            ctx.result["power_multiplier"] = 1.0
+        ctx.result["power_multiplier"] *= (1.0 + bonus_pct)
+
+
+def _h_damage_mod_non_light(tag: EffectTag, ctx: Ctx) -> None:
+    """DAMAGE_MOD_NON_LIGHT: 目空 - +25% non-light power"""
+    if not ctx.skill:
+        return
+    # Type.LIGHT = 18 (or check by name)
+    from .types import Type
+    if ctx.skill.type != Type.LIGHT:
+        bonus_pct = tag.params.get("bonus_pct", 0.25)
+        if "power_multiplier" not in ctx.result:
+            ctx.result["power_multiplier"] = 1.0
+        ctx.result["power_multiplier"] *= (1.0 + bonus_pct)
+
+
+def _h_damage_mod_non_weakness(tag: EffectTag, ctx: Ctx) -> None:
+    """DAMAGE_MOD_NON_WEAKNESS: 绒粉星光 - +100% vs non-weakness"""
+    if not ctx.user or not ctx.skill or not ctx.enemy:
+        return
+    from .types import get_type_effectiveness
+    # Check effectiveness
+    effectiveness = get_type_effectiveness(ctx.skill.type, ctx.enemy.type1, ctx.enemy.type2)
+    if effectiveness <= 1.0:  # Not super-effective
+        bonus_pct = tag.params.get("bonus_pct", 1.0)
+        if "power_multiplier" not in ctx.result:
+            ctx.result["power_multiplier"] = 1.0
+        ctx.result["power_multiplier"] *= (1.0 + bonus_pct)
+
+
+def _h_damage_mod_pollutant_blood(tag: EffectTag, ctx: Ctx) -> None:
+    """DAMAGE_MOD_POLLUTANT_BLOOD: 天通地明 - +100% vs pollutant blood (特定敌方血脉)"""
+    if ctx.enemy and ctx.enemy.ability_state is not None:
+        if ctx.enemy.ability_state.get("blood_type") == "pollutant":
+            bonus_pct = tag.params.get("bonus_pct", 1.0)
+            if "power_multiplier" not in ctx.result:
+                ctx.result["power_multiplier"] = 1.0
+            ctx.result["power_multiplier"] *= (1.0 + bonus_pct)
+
+
+def _h_damage_mod_leader_blood(tag: EffectTag, ctx: Ctx) -> None:
+    """DAMAGE_MOD_LEADER_BLOOD: 月光审判 - +100% vs leader blood (特定敌方血脉)"""
+    if ctx.enemy and ctx.enemy.ability_state is not None:
+        if ctx.enemy.ability_state.get("blood_type") == "leader":
+            bonus_pct = tag.params.get("bonus_pct", 1.0)
+            if "power_multiplier" not in ctx.result:
+                ctx.result["power_multiplier"] = 1.0
+            ctx.result["power_multiplier"] *= (1.0 + bonus_pct)
+
+
+def _h_damage_resist_same_type(tag: EffectTag, ctx: Ctx) -> None:
+    """DAMAGE_RESIST_SAME_TYPE: 偏振 - -40% from same-type attacks"""
+    if not ctx.user or not ctx.skill:
+        return
+    # If enemy uses same type attack, reduce damage
+    if ctx.skill.type == ctx.user.type1 or ctx.skill.type == ctx.user.type2:
+        resist_pct = tag.params.get("resist_pct", 0.4)
+        if "damage_reduction" not in ctx.result:
+            ctx.result["damage_reduction"] = 0
+        ctx.result["damage_reduction"] += resist_pct
+
 _HANDLERS: Dict[E, Callable] = {
     E.DAMAGE:                   _h_damage,
     E.SELF_BUFF:                _h_self_buff,
@@ -1420,6 +1782,37 @@ _HANDLERS: Dict[E, Callable] = {
     E.DELAYED_REVIVE:               _h_delayed_revive,
     E.COPY_SWITCH_STATE:            _h_copy_switch_state,
     E.COST_INVERT:                  _h_cost_invert,
+    # ── TIER 1 特性原语 ──
+    E.COUNTER_SUCCESS_DOUBLE_DAMAGE:     _h_counter_success_double_damage,
+    E.COUNTER_SUCCESS_BUFF_PERMANENT:    _h_counter_success_buff_permanent,
+    E.COUNTER_SUCCESS_POWER_BONUS:       _h_counter_success_power_bonus,
+    E.COUNTER_SUCCESS_COST_REDUCE:       _h_counter_success_cost_reduce,
+    E.COUNTER_SUCCESS_SPEED_PRIORITY:    _h_counter_success_speed_priority,
+    E.FIRST_STRIKE_POWER_BONUS:          _h_first_strike_power_bonus,
+    E.FIRST_STRIKE_HIT_COUNT:            _h_first_strike_hit_count,
+    E.FIRST_STRIKE_AGILITY:              _h_first_strike_agility,
+    E.AUTO_SWITCH_ON_ZERO_ENERGY:        _h_auto_switch_on_zero_energy,
+    E.AUTO_SWITCH_AFTER_ACTION:          _h_auto_switch_after_action,
+
+    # ── TIER 2 Handler Registrations ──
+    E.TEAM_SYNERGY_BUG_SWARM_ATTACK:     _h_team_synergy_bug_swarm_attack,
+    E.TEAM_SYNERGY_BUG_SWARM_INSPIRE:    _h_team_synergy_bug_swarm_inspire,
+    E.TEAM_SYNERGY_BRAVE_IF_BUGS:        _h_team_synergy_brave_if_bugs,
+    E.TEAM_SYNERGY_BUG_KILL_AFF:         _h_team_synergy_bug_kill_aff,
+    E.STAT_SCALE_DEFENSE_PER_ENERGY:     _h_stat_scale_defense_per_energy,
+    E.STAT_SCALE_HITS_PER_HP_LOST:       _h_stat_scale_hits_per_hp_lost,
+    E.STAT_SCALE_ATTACK_DECAY:           _h_stat_scale_attack_decay,
+    E.STAT_SCALE_METEOR_MARKS_PER_TURN:  _h_stat_scale_meteor_marks_per_turn,
+    E.MARK_POWER_PER_METEOR:             _h_mark_power_per_meteor,
+    E.MARK_FREEZE_TO_METEOR:             _h_mark_freeze_to_meteor,
+    E.MARK_STACK_NO_REPLACE:             _h_mark_stack_no_replace,
+    E.MARK_STACK_DEBUFFS:                _h_mark_stack_debuffs,
+    E.DAMAGE_MOD_NON_STAB:               _h_damage_mod_non_stab,
+    E.DAMAGE_MOD_NON_LIGHT:              _h_damage_mod_non_light,
+    E.DAMAGE_MOD_NON_WEAKNESS:           _h_damage_mod_non_weakness,
+    E.DAMAGE_MOD_POLLUTANT_BLOOD:        _h_damage_mod_pollutant_blood,
+    E.DAMAGE_MOD_LEADER_BLOOD:           _h_damage_mod_leader_blood,
+    E.DAMAGE_RESIST_SAME_TYPE:           _h_damage_resist_same_type,
 }
 
 # 特性中部分 handler 与技能略有不同，按 tag type 覆盖
@@ -1438,6 +1831,37 @@ _ABILITY_HANDLER_OVERRIDES: Dict[E, Callable] = {
     E.DELAYED_REVIVE:            _h_delayed_revive,
     E.COPY_SWITCH_STATE:         _h_copy_switch_state,
     E.COST_INVERT:               _h_cost_invert,
+    # ── TIER 1 特性原语（能力模式） ──
+    E.COUNTER_SUCCESS_DOUBLE_DAMAGE:     _h_counter_success_double_damage,
+    E.COUNTER_SUCCESS_BUFF_PERMANENT:    _h_counter_success_buff_permanent,
+    E.COUNTER_SUCCESS_POWER_BONUS:       _h_counter_success_power_bonus,
+    E.COUNTER_SUCCESS_COST_REDUCE:       _h_counter_success_cost_reduce,
+    E.COUNTER_SUCCESS_SPEED_PRIORITY:    _h_counter_success_speed_priority,
+    E.FIRST_STRIKE_POWER_BONUS:          _h_first_strike_power_bonus,
+    E.FIRST_STRIKE_HIT_COUNT:            _h_first_strike_hit_count,
+    E.FIRST_STRIKE_AGILITY:              _h_first_strike_agility,
+    E.AUTO_SWITCH_ON_ZERO_ENERGY:        _h_auto_switch_on_zero_energy,
+    E.AUTO_SWITCH_AFTER_ACTION:          _h_auto_switch_after_action,
+
+    # ── TIER 2 Handler Registrations (Ability Overrides) ──
+    E.TEAM_SYNERGY_BUG_SWARM_ATTACK:     _h_team_synergy_bug_swarm_attack,
+    E.TEAM_SYNERGY_BUG_SWARM_INSPIRE:    _h_team_synergy_bug_swarm_inspire,
+    E.TEAM_SYNERGY_BRAVE_IF_BUGS:        _h_team_synergy_brave_if_bugs,
+    E.TEAM_SYNERGY_BUG_KILL_AFF:         _h_team_synergy_bug_kill_aff,
+    E.STAT_SCALE_DEFENSE_PER_ENERGY:     _h_stat_scale_defense_per_energy,
+    E.STAT_SCALE_HITS_PER_HP_LOST:       _h_stat_scale_hits_per_hp_lost,
+    E.STAT_SCALE_ATTACK_DECAY:           _h_stat_scale_attack_decay,
+    E.STAT_SCALE_METEOR_MARKS_PER_TURN:  _h_stat_scale_meteor_marks_per_turn,
+    E.MARK_POWER_PER_METEOR:             _h_mark_power_per_meteor,
+    E.MARK_FREEZE_TO_METEOR:             _h_mark_freeze_to_meteor,
+    E.MARK_STACK_NO_REPLACE:             _h_mark_stack_no_replace,
+    E.MARK_STACK_DEBUFFS:                _h_mark_stack_debuffs,
+    E.DAMAGE_MOD_NON_STAB:               _h_damage_mod_non_stab,
+    E.DAMAGE_MOD_NON_LIGHT:              _h_damage_mod_non_light,
+    E.DAMAGE_MOD_NON_WEAKNESS:           _h_damage_mod_non_weakness,
+    E.DAMAGE_MOD_POLLUTANT_BLOOD:        _h_damage_mod_pollutant_blood,
+    E.DAMAGE_MOD_LEADER_BLOOD:           _h_damage_mod_leader_blood,
+    E.DAMAGE_RESIST_SAME_TYPE:           _h_damage_resist_same_type,
 }
 
 

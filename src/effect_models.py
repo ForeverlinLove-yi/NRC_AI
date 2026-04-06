@@ -133,6 +133,45 @@ class E(Enum):
 
 
 # ============================================================
+    # ── TIER 1 特性专用原语 ──
+    COUNTER_SUCCESS_DOUBLE_DAMAGE = auto()      # 应对成功后伤害翻倍（圣火骑士）
+    COUNTER_SUCCESS_BUFF_PERMANENT = auto()     # 应对成功后增益永久化 params: {"atk": 0.2, "spatk": 0}
+    COUNTER_SUCCESS_POWER_BONUS = auto()        # 应对成功后威力永久+N params: {"delta": 20}
+    COUNTER_SUCCESS_COST_REDUCE = auto()        # 应对成功后能耗永久-N params: {"delta": 5}
+    COUNTER_SUCCESS_SPEED_PRIORITY = auto()     # 应对成功后速度+1优先级（野性感官）params: {}
+    FIRST_STRIKE_POWER_BONUS = auto()           # 先手攻击威力加成 params: {"bonus_pct": 0.75}
+    FIRST_STRIKE_HIT_COUNT = auto()             # 先手攻击连击数+1（咔咔冲刺）params: {}
+    FIRST_STRIKE_AGILITY = auto()               # 首个技能获得迅捷（起飞加速）params: {}
+    AUTO_SWITCH_ON_ZERO_ENERGY = auto()         # 能量为0时自动换人（警惕）params: {}
+    AUTO_SWITCH_AFTER_ACTION = auto()           # 每个回合结束后自动换人（防过载保护）params: {}
+
+
+    # ── TIER 2 特性专用原语 ──
+    # Team Synergy (4)
+    TEAM_SYNERGY_BUG_SWARM_ATTACK = auto()       # 虫群突袭: +15% stats per other bug params: {"bonus_pct": 0.15}
+    TEAM_SYNERGY_BUG_SWARM_INSPIRE = auto()      # 虫群鼓舞: +10% stats per other bug params: {"bonus_pct": 0.1}
+    TEAM_SYNERGY_BRAVE_IF_BUGS = auto()          # 壮胆: +50% attack if bugs in team params: {"bonus_pct": 0.5}
+    TEAM_SYNERGY_BUG_KILL_AFF = auto()           # 振奋虫心: +5 aff on team kill params: {"aff_bonus": 5}
+    
+    # Stat Scaling (4)
+    STAT_SCALE_DEFENSE_PER_ENERGY = auto()       # 囤积: +10% defense per energy params: {"bonus_pct_per_energy": 0.1}
+    STAT_SCALE_HITS_PER_HP_LOST = auto()         # 嫁祸: +2 hits per 25% HP lost params: {"hits_per_quarter": 2}
+    STAT_SCALE_ATTACK_DECAY = auto()             # 全神贯注: +100% attack, -20% per action params: {"init_bonus": 1.0, "decay_per_action": 0.2}
+    STAT_SCALE_METEOR_MARKS_PER_TURN = auto()    # 吸积盘: +2 meteor marks per turn params: {"marks_per_turn": 2}
+    
+    # Mark-Based (5)
+    MARK_POWER_PER_METEOR = auto()               # 坠星/观星: +15% power per meteor mark params: {"bonus_pct_per_mark": 0.15}
+    MARK_FREEZE_TO_METEOR = auto()               # 月牙雪糕: Freeze = meteor mark params: {"convert_freeze_to_mark": 1}
+    MARK_STACK_NO_REPLACE = auto()               # 吟游之弦: Marks stack (don't replace) params: {}
+    MARK_STACK_DEBUFFS = auto()                  # 灰色肖像: Stack enemy debuffs +3 params: {"stack_bonus": 3}
+    
+    # Damage Type Modifiers (6)
+    DAMAGE_MOD_NON_STAB = auto()                 # 涂鸦: +50% non-STAB power params: {"bonus_pct": 0.5}
+    DAMAGE_MOD_NON_LIGHT = auto()                # 目空: +25% non-light power params: {"bonus_pct": 0.25}
+    DAMAGE_MOD_NON_WEAKNESS = auto()             # 绒粉星光: +100% vs non-weakness params: {"bonus_pct": 1.0}
+    DAMAGE_MOD_POLLUTANT_BLOOD = auto()          # 天通地明: +100% vs pollutant blood params: {"bonus_pct": 1.0}
+    DAMAGE_MOD_LEADER_BLOOD = auto()             # 月光审判: +100% vs leader blood params: {"bonus_pct": 1.0}
+    DAMAGE_RESIST_SAME_TYPE = auto()             # 偏振: -40% from same-type attacks params: {"resist_pct": 0.4}
 # 触发时机枚举 (用于特性)
 # ============================================================
 class Timing(Enum):

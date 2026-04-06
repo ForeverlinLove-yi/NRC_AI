@@ -645,4 +645,214 @@ ABILITY_EFFECTS = {
         AE(Timing.PASSIVE,
            [T(E.COST_INVERT)]),
     ],
+
+    # ──────────────── TIER 1: 关键特性配置 (12个) ────────────────
+    # ✅ 已实现的新效果原语系统 (2026-04-07)
+    
+    # ──应对成功系统 (5个)──
+
+    # 圣火骑士 — 应对成功后下次伤害翻倍
+    "圣火骑士": [
+        AE(Timing.ON_COUNTER_SUCCESS,
+           [T(E.COUNTER_SUCCESS_DOUBLE_DAMAGE)]),
+    ],
+
+    # 指挥家 — 应对成功后物攻永久+20%
+    "指挥家": [
+        AE(Timing.ON_COUNTER_SUCCESS,
+           [T(E.COUNTER_SUCCESS_BUFF_PERMANENT, atk=0.2)]),
+    ],
+
+    # 斗技 — 应对成功后威力永久+20
+    "斗技": [
+        AE(Timing.ON_COUNTER_SUCCESS,
+           [T(E.COUNTER_SUCCESS_POWER_BONUS, delta=20)]),
+    ],
+
+    # 思维之盾 — 应对成功后能耗永久-5
+    "思维之盾": [
+        AE(Timing.ON_COUNTER_SUCCESS,
+           [T(E.COUNTER_SUCCESS_COST_REDUCE, delta=5)]),
+    ],
+
+    # 野性感官 — 应对成功后速度优先级+1
+    "野性感官": [
+        AE(Timing.ON_COUNTER_SUCCESS,
+           [T(E.COUNTER_SUCCESS_SPEED_PRIORITY)]),
+    ],
+
+    # ── 先手系统 (4个) ──
+
+    # 破空 — 先发制人时威力+75%
+    "破空": [
+        AE(Timing.PASSIVE, [
+            T(E.FIRST_STRIKE_POWER_BONUS, bonus_pct=0.75)
+        ]),
+    ],
+
+    # 顺风 — 先发制人时威力+50%
+    "顺风": [
+        AE(Timing.PASSIVE, [
+            T(E.FIRST_STRIKE_POWER_BONUS, bonus_pct=0.5)
+        ]),
+    ],
+
+    # 咔咔冲刺 — 先发制人时连击数+1
+    "咔咔冲刺": [
+        AE(Timing.PASSIVE, [
+            T(E.FIRST_STRIKE_HIT_COUNT)
+        ]),
+    ],
+
+    # 起飞加速 — 首个技能获得迅捷
+    "起飞加速": [
+        AE(Timing.ON_ENTER, [
+            T(E.FIRST_STRIKE_AGILITY)
+        ]),
+    ],
+
+    # ── 回合结束系统 (3个) ──
+
+    # 警惕 — 能量为0时自动换人
+    "警惕": [
+        AE(Timing.ON_TURN_END, [
+            T(E.AUTO_SWITCH_ON_ZERO_ENERGY)
+        ]),
+    ],
+
+    # 防过载保护 — 每回合结束后自动换人
+    "防过载保护": [
+        AE(Timing.ON_TURN_END, [
+            T(E.AUTO_SWITCH_AFTER_ACTION)
+        ]),
+    ],
+
+    # 星地善良 — 能量为0时自动换人
+    "星地善良": [
+        AE(Timing.ON_TURN_END, [
+            T(E.AUTO_SWITCH_ON_ZERO_ENERGY)
+        ]),
+    ],
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # TIER 2 特性配置 (25 abilities)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    # ── Team Synergy (4) ──
+    "虫群突袭": [
+        AE(Timing.PASSIVE, [
+            T(E.TEAM_SYNERGY_BUG_SWARM_ATTACK, bonus_pct=0.15)
+        ]),
+    ],
+    
+    "虫群鼓舞": [
+        AE(Timing.PASSIVE, [
+            T(E.TEAM_SYNERGY_BUG_SWARM_INSPIRE, bonus_pct=0.1)
+        ]),
+    ],
+    
+    "壮胆": [
+        AE(Timing.PASSIVE, [
+            T(E.TEAM_SYNERGY_BRAVE_IF_BUGS, bonus_pct=0.5)
+        ]),
+    ],
+    
+    "振奋虫心": [
+        AE(Timing.ON_KILL, [
+            T(E.TEAM_SYNERGY_BUG_KILL_AFF, aff_bonus=5)
+        ]),
+    ],
+    
+    # ── Stat Scaling (4) ──
+    "囤积": [
+        AE(Timing.PASSIVE, [
+            T(E.STAT_SCALE_DEFENSE_PER_ENERGY, bonus_pct_per_energy=0.1)
+        ]),
+    ],
+    
+    "嫁祸": [
+        AE(Timing.PASSIVE, [
+            T(E.STAT_SCALE_HITS_PER_HP_LOST, hits_per_quarter=2)
+        ]),
+    ],
+    
+    "全神贯注": [
+        AE(Timing.PASSIVE, [
+            T(E.STAT_SCALE_ATTACK_DECAY, init_bonus=1.0, decay_per_action=0.2)
+        ]),
+    ],
+    
+    "吸积盘": [
+        AE(Timing.ON_TURN_END, [
+            T(E.STAT_SCALE_METEOR_MARKS_PER_TURN, marks_per_turn=2)
+        ]),
+    ],
+    
+    # ── Mark-Based (5) ──
+    "坠星": [
+        AE(Timing.PASSIVE, [
+            T(E.MARK_POWER_PER_METEOR, bonus_pct_per_mark=0.15)
+        ]),
+    ],
+    
+    "观星": [
+        AE(Timing.PASSIVE, [
+            T(E.MARK_POWER_PER_METEOR, bonus_pct_per_mark=0.15)
+        ]),
+    ],
+    
+    "月牙雪糕": [
+        AE(Timing.ON_USE_SKILL, [
+            T(E.MARK_FREEZE_TO_METEOR)
+        ]),
+    ],
+    
+    "吟游之弦": [
+        AE(Timing.PASSIVE, [
+            T(E.MARK_STACK_NO_REPLACE)
+        ]),
+    ],
+    
+    "灰色肖像": [
+        AE(Timing.ON_ENTER, [
+            T(E.MARK_STACK_DEBUFFS, stack_bonus=3)
+        ]),
+    ],
+    
+    # ── Damage Type Modifiers (6) ──
+    "涂鸦": [
+        AE(Timing.PASSIVE, [
+            T(E.DAMAGE_MOD_NON_STAB, bonus_pct=0.5)
+        ]),
+    ],
+    
+    "目空": [
+        AE(Timing.PASSIVE, [
+            T(E.DAMAGE_MOD_NON_LIGHT, bonus_pct=0.25)
+        ]),
+    ],
+    
+    "绒粉星光": [
+        AE(Timing.PASSIVE, [
+            T(E.DAMAGE_MOD_NON_WEAKNESS, bonus_pct=1.0)
+        ]),
+    ],
+    
+    "天通地明": [
+        AE(Timing.PASSIVE, [
+            T(E.DAMAGE_MOD_POLLUTANT_BLOOD, bonus_pct=1.0)
+        ]),
+    ],
+    
+    "月光审判": [
+        AE(Timing.PASSIVE, [
+            T(E.DAMAGE_MOD_LEADER_BLOOD, bonus_pct=1.0)
+        ]),
+    ],
+    
+    "偏振": [
+        AE(Timing.PASSIVE, [
+            T(E.DAMAGE_RESIST_SAME_TYPE, resist_pct=0.4)
+        ]),
+    ],
+
 }
