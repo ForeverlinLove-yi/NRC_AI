@@ -470,10 +470,15 @@ function renderState(s){
   renderStrip('strip-a',s.team_a,s.current_a);
   renderStrip('strip-b',s.team_b,s.current_b);
   if(s.force_switch_prompt && !s.game_over){
-    // 泡沫幻影等应对后强制换人：只展示换人面板，隐藏技能
+    // 强制换人属于玩家输入阶段，必须清掉上一帧 AI 思考遮罩，否则会盖住换人面板
+    myTurn=true;
+    setWait(false);
+    enableActions(false);
     renderSkills(null, null); // 清空技能区
     renderForceSwitchPanel(s.team_a, s.current_a, pb);
   } else if(s.waiting_for_player && !s.game_over){
+    myTurn=true;
+    setWait(false);
     renderSkills(pa, pb);
     renderSwitchPanel(s.team_a, s.current_a, pb);
   }
@@ -576,6 +581,7 @@ function renderStrip(id,team,cur){
 function renderSkills(pa, pb){
   const grid=document.getElementById('skill-grid');
   grid.innerHTML='';
+  if(!pa || !pa.skills) return;
   pa.skills.forEach((s,i)=>{
     const btn=document.createElement('button');
     btn.className='skill-btn'+(s.on_cooldown?' cd-btn':'');
