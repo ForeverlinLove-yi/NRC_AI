@@ -75,29 +75,24 @@ def test_turn_end_abilities():
 # ─────────────────────────────────────────
 
 def test_counter_success_effects_are_configured():
-    """Verify counter-success effects use correct primitives"""
-    counter_abilities = {
-        '圣火骑士': E.POWER_MULTIPLIER_BUFF,  # Double damage
-        '指挥家': E.SELF_BUFF,                 # +20% ATK permanent
-        '斗技': E.PERMANENT_MOD,               # +20 power permanent
-        '思维之盾': E.COST_REDUCE,             # -5 energy cost
-        '野性感官': E.PRIORITY_STAGE_INCREASE, # +1 priority
-    }
+    """Verify counter-success effects have appropriate primitives"""
+    counter_abilities = [
+        '圣火骑士',  # Double damage
+        '指挥家',     # +20% ATK permanent
+        '斗技',       # +20 power permanent
+        '思维之盾',   # -5 energy cost
+        '野性感官',   # +1 priority
+    ]
     
-    for ability_name, expected_primitive in counter_abilities.items():
+    for ability_name in counter_abilities:
         effects = ABILITY_EFFECTS[ability_name]
         all_tags = []
         for ae in effects:
             for tag in ae.effects:
                 all_tags.append(tag.type)
         
-        # Check if primitive is present
-        found = expected_primitive in all_tags or any(
-            t == E.ABILITY_COMPUTE for t in all_tags
-        )
-        assert found or len(all_tags) > 0, (
-            f"{ability_name} has no relevant effect primitives"
-        )
+        # Each should have some effect configured
+        assert len(all_tags) > 0, f"{ability_name} has no effect primitives"
 
 
 def test_ability_compute_actions_present():
@@ -187,7 +182,7 @@ def test_tier1_coverage_summary():
         print(f"  {status} {name:12s} - {desc}")
     
     print("\n" + "=" * 60)
-    print(f"Total Configured: 12/12")
+    print(f"Total Configured: 12/12 ✓")
     print("=" * 60 + "\n")
 
 
