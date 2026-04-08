@@ -53,35 +53,31 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
 /* ── arena ── */
 #arena{
   position:relative;height:var(--field-h);flex-shrink:0;overflow:hidden;
-  background:
-    radial-gradient(ellipse 120% 60% at 50% 0%,#1a3a6e 0%,transparent 60%),
-    linear-gradient(180deg,#0d1f42 0%,#102040 40%,#172d50 70%,#1a3a28 85%,#1d4a30 100%);
+  background:linear-gradient(180deg,#87CEEB 0%,#B0DCF0 30%,#C8E6C9 55%,#7CB342 68%,#558B2F 85%,#33691E 100%);
 }
-/* 天空云层 */
+/* 云朵 */
 #arena::before{
   content:'';position:absolute;inset:0;
   background:
-    radial-gradient(ellipse 30% 15% at 20% 25%,rgba(255,255,255,.06) 0%,transparent 70%),
-    radial-gradient(ellipse 20% 10% at 70% 20%,rgba(255,255,255,.04) 0%,transparent 70%),
-    radial-gradient(ellipse 15% 8% at 50% 30%,rgba(255,255,255,.03) 0%,transparent 70%);
+    radial-gradient(ellipse 35% 12% at 15% 18%,rgba(255,255,255,.55) 0%,transparent 70%),
+    radial-gradient(ellipse 25% 10% at 60% 12%,rgba(255,255,255,.45) 0%,transparent 70%),
+    radial-gradient(ellipse 18% 8% at 82% 22%,rgba(255,255,255,.35) 0%,transparent 70%),
+    radial-gradient(ellipse 22% 9% at 40% 25%,rgba(255,255,255,.3) 0%,transparent 70%);
   pointer-events:none
 }
-/* 草地平台 */
+/* 草地 */
 #arena::after{
-  content:'';position:absolute;bottom:0;left:0;right:0;height:42%;
-  background:
-    linear-gradient(180deg,transparent 0%,rgba(26,70,40,.9) 30%,rgba(22,60,34,1) 100%);
-  border-top:2px solid rgba(60,160,80,.3);
+  content:'';position:absolute;bottom:0;left:0;right:0;height:38%;
+  background:linear-gradient(180deg,#7CB342 0%,#689F38 40%,#558B2F 100%);
   pointer-events:none
 }
-/* 战斗平台（我方） */
+/* 椭圆平台 */
 .platform{
-  position:absolute;bottom:34%;width:140px;height:22px;border-radius:50%;
-  background:radial-gradient(ellipse,rgba(0,0,0,.35) 0%,transparent 70%);
-  pointer-events:none
+  position:absolute;bottom:30%;width:180px;height:28px;border-radius:50%;
+  pointer-events:none;z-index:1
 }
-#plat-a{left:18%;transform:translateX(-50%)}
-#plat-b{right:18%;transform:translateX(50%)}
+#plat-a{left:18%;transform:translateX(-50%);background:radial-gradient(ellipse,rgba(76,175,80,.5) 0%,rgba(56,142,60,.3) 50%,transparent 70%);box-shadow:0 2px 12px rgba(0,0,0,.2)}
+#plat-b{right:18%;transform:translateX(50%);background:radial-gradient(ellipse,rgba(76,175,80,.5) 0%,rgba(56,142,60,.3) 50%,transparent 70%);box-shadow:0 2px 12px rgba(0,0,0,.2)}
 /* 分隔线 */
 .field-line{
   position:absolute;bottom:38%;left:0;right:0;height:1px;
@@ -89,30 +85,33 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
   pointer-events:none
 }
 
-/* ── HP 条（顶部覆盖） ── */
+/* ── HP 面板（Showdown 风格白底） ── */
 .hp-panel{
-  position:absolute;top:12px;width:230px;
-  background:rgba(10,18,40,.82);
-  border:1px solid rgba(79,195,247,.18);
-  border-radius:10px;
-  padding:8px 10px;
-  backdrop-filter:blur(6px);
-  box-shadow:0 4px 20px rgba(0,0,0,.5)
+  position:absolute;top:10px;width:224px;
+  background:rgba(255,255,255,.88);
+  border:1px solid #aaa;
+  border-radius:8px;
+  padding:6px 10px;
+  box-shadow:0 2px 8px rgba(0,0,0,.15);
+  color:#222;z-index:2
 }
-#hpbar-a{left:12px}
-#hpbar-b{right:12px}
-.hpbar-top{display:flex;align-items:center;gap:5px;margin-bottom:5px}
-.hpbar-name{font-size:12px;font-weight:700;color:var(--text);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.type-badge{font-size:9px;padding:1px 6px;border-radius:5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;flex-shrink:0}
-/* 能量条（替代圆点） */
-.energy-bar-wrap{margin-bottom:5px}
-.energy-label{font-size:8px;color:var(--dim);margin-bottom:2px;display:flex;justify-content:space-between}
-.energy-track{height:5px;background:rgba(255,255,255,.07);border-radius:3px;overflow:hidden}
-.energy-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#60a5fa,#38bdf8);transition:width .3s ease;box-shadow:0 0 6px rgba(79,195,247,.5)}
+#hpbar-a{left:10px}
+#hpbar-b{right:10px}
+.hpbar-top{display:flex;align-items:center;gap:5px;margin-bottom:4px}
+.hpbar-name{font-size:12px;font-weight:700;color:#222;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.type-badge{font-size:9px;padding:1px 6px;border-radius:5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;flex-shrink:0;color:#fff}
+/* 能量圆点 */
+.energy-row{display:flex;gap:3px;margin-bottom:4px;align-items:center}
+.energy-label{font-size:8px;color:#777;margin-right:4px}
+#energy-a,#energy-b{display:flex;gap:3px}
+.e-dot{width:7px;height:7px;border-radius:50%;background:#ccc;border:1px solid #aaa;transition:background .2s,box-shadow .2s}
+.e-dot.on{background:#4FC3F7;border-color:#0288D1;box-shadow:0 0 4px rgba(79,195,247,.6)}
 /* HP 条 */
-.hp-track{height:8px;background:rgba(255,255,255,.07);border-radius:5px;overflow:hidden;margin-bottom:3px}
-.hp-fill{height:100%;border-radius:5px;transition:width .45s ease,background .45s;background:var(--hp-g);box-shadow:0 0 8px currentColor}
-.hp-text{font-size:9px;color:var(--dim);display:flex;justify-content:space-between}
+.hp-track{height:8px;background:#ddd;border:1px solid #999;border-radius:4px;overflow:hidden;margin-bottom:2px;position:relative}
+.hp-fill{height:100%;border-radius:3px;transition:width .45s ease,background .45s;background:linear-gradient(180deg,#00dd60 0%,#00bb51 50%,#007734 100%)}
+.hp-fill.hp-yellow{background:linear-gradient(180deg,#f8e379 0%,#f5d538 50%,#be9f0a 100%)}
+.hp-fill.hp-red{background:linear-gradient(180deg,#f37f67 0%,#ee4928 50%,#a3260d 100%)}
+.hp-text{font-size:9px;color:#666;display:flex;justify-content:space-between}
 /* 状态行 */
 .buff-row{display:flex;flex-wrap:wrap;gap:2px;margin-top:4px;min-height:14px}
 .buff-tag{font-size:8px;padding:1px 5px;border-radius:6px;font-weight:600;line-height:1.5}
@@ -131,9 +130,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
 
 /* ── 精灵槽 ── */
 .poke-slot{
-  position:absolute;bottom:calc(34% - 10px);
+  position:absolute;bottom:calc(30% - 5px);
   display:flex;flex-direction:column;align-items:center;gap:4px;
-  transition:transform .18s ease
+  transition:transform .18s ease;z-index:2
 }
 #slot-a{left:18%;transform:translateX(-50%)}
 #slot-b{right:18%;transform:translateX(50%)}
@@ -142,19 +141,28 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
 .sprite-img{
   width:120px;height:120px;
   object-fit:contain;
-  filter:drop-shadow(0 6px 20px rgba(0,0,0,.8));
+  filter:drop-shadow(2px 4px 6px rgba(0,0,0,.4));
   transition:opacity .35s,filter .35s;
   image-rendering:-webkit-optimize-contrast
 }
 #sprite-a .sprite-img{transform:scaleX(-1)}
 
-/* 精灵背光圈 */
+/* 精灵脚下发光圈 */
 .sprite-glow{
-  position:absolute;bottom:0;width:100px;height:30px;border-radius:50%;
-  pointer-events:none
+  position:absolute;bottom:-8px;width:100px;height:24px;border-radius:50%;
+  pointer-events:none;
+  border:2px solid transparent
 }
-#slot-a .sprite-glow{background:radial-gradient(ellipse,rgba(79,195,247,.35) 0%,transparent 70%)}
-#slot-b .sprite-glow{background:radial-gradient(ellipse,rgba(248,113,113,.35) 0%,transparent 70%)}
+#slot-a .sprite-glow{
+  border-color:rgba(33,150,243,.7);
+  background:radial-gradient(ellipse,rgba(33,150,243,.2) 0%,transparent 70%);
+  box-shadow:0 0 12px rgba(33,150,243,.5),0 0 24px rgba(33,150,243,.2)
+}
+#slot-b .sprite-glow{
+  border-color:rgba(244,67,54,.7);
+  background:radial-gradient(ellipse,rgba(244,67,54,.2) 0%,transparent 70%);
+  box-shadow:0 0 12px rgba(244,67,54,.5),0 0 24px rgba(244,67,54,.2)
+}
 
 /* Emoji 降级精灵（无图时） */
 .sprite-emoji{
@@ -166,9 +174,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
 #sprite-a .sprite-emoji{transform:scaleX(-1)}
 
 .sprite-label{
-  font-size:10px;font-weight:700;color:rgba(255,255,255,.7);
-  text-shadow:0 1px 4px rgba(0,0,0,1);
-  background:rgba(0,0,0,.4);padding:1px 8px;border-radius:8px
+  font-size:10px;font-weight:700;color:#333;
+  text-shadow:0 1px 2px rgba(255,255,255,.8);
+  background:rgba(255,255,255,.6);padding:1px 8px;border-radius:8px
 }
 
 /* 防御盾牌 */
@@ -340,7 +348,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
 .sprite-faint{animation:faint-drop .6s ease forwards}
 .shield-pulse-a{animation:shield-pulse .5s ease}
 .shield-pulse-b{animation:shield-b-pulse .5s ease}
-.float-dmg{position:absolute;font-size:16px;font-weight:900;pointer-events:none;animation:float-up .9s ease forwards;text-shadow:0 2px 8px rgba(0,0,0,.9);z-index:20}
+.float-dmg{position:absolute;font-size:20px;font-weight:900;pointer-events:none;animation:float-up .9s ease forwards;
+  text-shadow:0 0 4px #fff,0 0 4px #fff,1px 1px 0 #fff,-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff;
+  z-index:20}
 .sprite-entry{animation:entry-bounce .55s cubic-bezier(.34,1.56,.64,1) forwards}
 </style>
 </head>
@@ -364,17 +374,15 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
       <div class="platform" id="plat-a"></div>
       <div class="platform" id="plat-b"></div>
 
-      <!-- HP 面板 A（玻璃卡片） -->
+      <!-- HP 面板 A -->
       <div class="hp-panel" id="hpbar-a">
         <div class="hpbar-top">
           <span class="hpbar-name" id="name-a">—</span>
           <span id="type-a" class="type-badge"></span>
         </div>
-        <div class="energy-bar-wrap">
-          <div class="energy-label">
-            <span>能量</span><span id="energy-text-a">0/10</span>
-          </div>
-          <div class="energy-track"><div class="energy-fill" id="energy-fill-a" style="width:0%"></div></div>
+        <div class="energy-row">
+          <span class="energy-label">能量</span>
+          <div id="energy-a"></div>
         </div>
         <div class="hp-track"><div class="hp-fill" id="hp-fill-a" style="width:100%"></div></div>
         <div class="hp-text"><span>我方</span><span id="hp-text-a">—</span></div>
@@ -387,11 +395,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg-dark);color
           <span class="hpbar-name" id="name-b">—</span>
           <span id="type-b" class="type-badge"></span>
         </div>
-        <div class="energy-bar-wrap">
-          <div class="energy-label">
-            <span>能量</span><span id="energy-text-b">0/10</span>
-          </div>
-          <div class="energy-track"><div class="energy-fill" id="energy-fill-b" style="width:0%"></div></div>
+        <div class="energy-row">
+          <span class="energy-label">能量</span>
+          <div id="energy-b"></div>
         </div>
         <div class="hp-track"><div class="hp-fill" id="hp-fill-b" style="width:100%"></div></div>
         <div class="hp-text"><span>AI方</span><span id="hp-text-b">—</span></div>
@@ -626,23 +632,23 @@ function updateHpBar(side,p){
   const txt    = document.getElementById(`hp-text-${side}`);
   const name   = document.getElementById(`name-${side}`);
   const tb     = document.getElementById(`type-${side}`);
-  const eFill  = document.getElementById(`energy-fill-${side}`);
-  const eTxt   = document.getElementById(`energy-text-${side}`);
+  const ec     = document.getElementById(`energy-${side}`);
   const pct    = p.hp>0 ? p.current_hp/p.hp*100 : 0;
 
   fill.style.width = pct+'%';
-  const hpColor = pct>50 ? 'var(--hp-g)' : pct>20 ? 'var(--hp-y)' : 'var(--hp-r)';
-  fill.style.background = hpColor;
-  fill.style.boxShadow  = `0 0 8px ${hpColor}`;
+  fill.className = 'hp-fill' + (pct<=20?' hp-red':pct<=50?' hp-yellow':'');
   txt.textContent = `${p.current_hp}/${p.hp}`;
   name.textContent = p.name;
   tb.className = `type-badge ${TYPE_CLASS[p.type]||''}`;
   tb.textContent = TYPE_ZH[p.type]||p.type;
 
-  // 能量条
-  const ePct = Math.min(100, p.energy/10*100);
-  eFill.style.width = ePct+'%';
-  eTxt.textContent = `${p.energy}/10`;
+  // 能量圆点
+  ec.innerHTML = '';
+  for(let i=0;i<10;i++){
+    const d = document.createElement('div');
+    d.className = 'e-dot' + (i<p.energy?' on':'');
+    ec.appendChild(d);
+  }
 
   renderBuffRow(side, p);
 }
@@ -927,12 +933,12 @@ function playHit(side, dmg){
     const fl   =document.createElement('div');
     fl.className='float-dmg';
     fl.textContent=`-${dmg}`;
-    fl.style.color=side==='a'?'#fca5a5':'#fb923c';
+    fl.style.color='#e53935';
     const sr=slot.getBoundingClientRect(), ar=arena.getBoundingClientRect();
     fl.style.left=(sr.left-ar.left+sr.width/2-18)+'px';
-    fl.style.top =(sr.top -ar.top+10)+'px';
+    fl.style.top =(sr.top -ar.top+5)+'px';
     arena.appendChild(fl);
-    setTimeout(()=>fl.remove(),920);
+    setTimeout(()=>fl.remove(),950);
   }
 }
 

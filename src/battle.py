@@ -1430,9 +1430,11 @@ def _is_first_action(state: BattleState, team: str, action: Action,
 
 
 def get_priority(state: BattleState, team: str, action: Action) -> int:
-    """获取先手等级。默认 0，+1 必定先于 0，-1 慢于 0。"""
+    """获取先手等级。换人优先级最高(+99)，聚能正常(0)，技能看先手加成。"""
+    if action[0] == -2:
+        return 99  # 换人优先级最高，总是在技能之前执行
     if action[0] < 0:
-        return 0
+        return 0   # 聚能正常优先级
     team_list = state.team_a if team == "a" else state.team_b
     idx = state.current_a if team == "a" else state.current_b
     if action[0] >= len(team_list[idx].skills):
