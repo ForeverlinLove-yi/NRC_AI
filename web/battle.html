@@ -909,7 +909,7 @@ function playEvents(events){
   let delay = 0;
   events.forEach(ev=>{
     setTimeout(()=>{
-      if(ev.type==='hit')    playHit(ev.side, ev.dmg);
+      if(ev.type==='hit')    playHit(ev.side, ev.dmg, ev.eff);
       if(ev.type==='shield') playShield(ev.side);
       if(ev.type==='faint')  playFaint(ev.side);
     }, delay);
@@ -917,7 +917,7 @@ function playEvents(events){
   });
 }
 
-function playHit(side, dmg){
+function playHit(side, dmg, eff){
   const atkSide = side==='a'?'b':'a';
   const atkSlot = document.getElementById(`slot-${atkSide}`);
   const spriteEl = document.getElementById(`sprite-${side}`).querySelector('img,.sprite-emoji');
@@ -932,8 +932,12 @@ function playHit(side, dmg){
     const slot =document.getElementById(`slot-${side}`);
     const fl   =document.createElement('div');
     fl.className='float-dmg';
-    fl.textContent=`-${dmg}`;
-    fl.style.color='#e53935';
+    let label = `-${dmg}`;
+    if(eff==='super') label += ' 克制！';
+    else if(eff==='resist') label += ' 抵抗';
+    fl.textContent = label;
+    fl.style.color = eff==='super' ? '#c62828' : eff==='resist' ? '#888' : '#e53935';
+    if(eff==='super') fl.style.fontSize = '24px';
     const sr=slot.getBoundingClientRect(), ar=arena.getBoundingClientRect();
     fl.style.left=(sr.left-ar.left+sr.width/2-18)+'px';
     fl.style.top =(sr.top -ar.top+5)+'px';

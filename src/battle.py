@@ -271,6 +271,8 @@ class DamageCalculator:
         power_mult_buff = getattr(attacker, "power_multiplier", 1.0)
 
         damage = base * eff * stab * weather_mult * hits * power_mult_buff
+        # 保存属性克制到攻击方临时状态，供前端事件使用
+        attacker.ability_state["_last_effectiveness"] = eff
         return max(1, int(damage))
 
 
@@ -917,7 +919,23 @@ def _execute_with_counter(state: BattleState, team: str, action: Action,
 
     # 汇合聚能
     if action[0] == -1:
-        current.gain_energy(5)
+        # 检查对方技能是否有打断效果（打断可阻止聚能回能）
+        enemy_skill_obj = None
+        if enemy_action[0] >= 0 and not enemy.is_fainted:
+            enemy_skill_obj = enemy.skills[enemy_action[0]] if enemy_action[0] < len(enemy.skills) else None
+        interrupted = False
+        if enemy_skill_obj and hasattr(enemy_skill_obj, "effects"):
+            for se in (enemy_skill_obj.effects or []):
+                from src.effect_models import SkillEffect as _SE2, SkillTiming as _ST2
+                if isinstance(se, _SE2) and se.timing == _ST2.ON_COUNTER:
+                    for t in se.effects:
+                        if t.type == E.INTERRUPT:
+                            interrupted = True
+                            break
+                if interrupted:
+                    break
+        if not interrupted:
+            current.gain_energy(5)
         # 木桶状态：聚能也算主动行动，清除木桶
         current.ability_state.pop("barrel_active", None)
         return

@@ -1096,19 +1096,41 @@ def _build_events(snap_before, snap_after, state, action_a, action_b, pa_before,
     events = []
     n = len(state.team_a)
 
-    # A 方伤害事件
-    ca = snap_before.get("current_a", 0)
-    hp_before = snap_before.get(f"a_{ca}_hp", 0)
-    hp_after  = snap_after.get(f"a_{ca}_hp", 0)
-    if hp_before - hp_after > 0:
-        events.append({"type": "hit", "side": "a", "dmg": hp_before - hp_after})
+    # A 方伤害事件 —— 用 snap_after 的 current 来找正确的精灵（换人后检测新精灵）
+    ca_after = snap_after.get("current_a", snap_before.get("current_a", 0))
+    ca_before = snap_before.get("current_a", 0)
+    # 如果换人了，旧精灵HP不变，检测新精灵的HP差
+    if ca_after != ca_before:
+        hp_before_val = snap_before.get(f"a_{ca_after}_hp", snap_after.get(f"a_{ca_after}_hp", 0))
+        hp_after_val = snap_after.get(f"a_{ca_after}_hp", 0)
+    else:
+        hp_before_val = snap_before.get(f"a_{ca_after}_hp", 0)
+        hp_after_val = snap_after.get(f"a_{ca_after}_hp", 0)
+    dmg_a = hp_before_val - hp_after_val
+    if dmg_a > 0:
+        # 查攻击方(B)的属性克制信息
+        eff_a = state.team_b[cb_after].ability_state.pop("_last_effectiveness", 1.0) if cb_after < len(state.team_b) else 1.0
+        evt = {"type": "hit", "side": "a", "dmg": dmg_a}
+        if eff_a >= 2.0: evt["eff"] = "super"
+        elif eff_a <= 0.5 and eff_a > 0: evt["eff"] = "resist"
+        events.append(evt)
 
     # B 方伤害事件
-    cb = snap_before.get("current_b", 0)
-    hp_before = snap_before.get(f"b_{cb}_hp", 0)
-    hp_after  = snap_after.get(f"b_{cb}_hp", 0)
-    if hp_before - hp_after > 0:
-        events.append({"type": "hit", "side": "b", "dmg": hp_before - hp_after})
+    cb_after = snap_after.get("current_b", snap_before.get("current_b", 0))
+    cb_before = snap_before.get("current_b", 0)
+    if cb_after != cb_before:
+        hp_before_val = snap_before.get(f"b_{cb_after}_hp", snap_after.get(f"b_{cb_after}_hp", 0))
+        hp_after_val = snap_after.get(f"b_{cb_after}_hp", 0)
+    else:
+        hp_before_val = snap_before.get(f"b_{cb_after}_hp", 0)
+        hp_after_val = snap_after.get(f"b_{cb_after}_hp", 0)
+    dmg_b = hp_before_val - hp_after_val
+    if dmg_b > 0:
+        eff_b = state.team_a[ca_after].ability_state.pop("_last_effectiveness", 1.0) if ca_after < len(state.team_a) else 1.0
+        evt = {"type": "hit", "side": "b", "dmg": dmg_b}
+        if eff_b >= 2.0: evt["eff"] = "super"
+        elif eff_b <= 0.5 and eff_b > 0: evt["eff"] = "resist"
+        events.append(evt)
 
     # 防御技能（damage_reduction > 0）→ 盾牌事件
     if action_a[0] >= 0:
