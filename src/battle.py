@@ -351,13 +351,13 @@ def auto_switch(state: BattleState, switch_cb_a=None, switch_cb_b=None) -> None:
             state.team_a[state.current_a].on_switch_out()
             # 暂时换上 alive[0]，server.py 会通过 pending_switch_requests 让玩家选
             state.current_a = alive[0]
-            if len(alive) > 1:
-                # 多于1只存活 → 记录待选请求，让前端弹选人面板
-                state.pending_switch_requests.append({
-                    "team": "a",
-                    "reason": "fainted",
-                    "alive": alive,
-                })
+            # 候选列表：alive[0] 已作占位，其余的才是可选候选；但若只有1只则直接用它
+            candidates = alive[1:] if len(alive) > 1 else alive
+            state.pending_switch_requests.append({
+                "team": "a",
+                "reason": "fainted",
+                "alive": candidates,
+            })
             # 印记入场效果（用占位精灵触发，玩家选完后再触发一次）
             _apply_mark_on_enter(state, "a", state.team_a[state.current_a])
 
@@ -459,10 +459,10 @@ def turn_end_effects(state: BattleState) -> None:
                 dmg = int(p.hp * 0.03 * p.poison_stacks)
                 p.current_hp -= max(1, dmg)
 
-            # 燃烧: 4% × 层数, 然后层数减半(最少减1层)
+            # 燃烧: 2% × 层数, 然后层数减半(最少减1层)
             # 燃薪虫煤渣草: 灼烧不衰减反而增长
             if p.burn_stacks > 0:
-                dmg = int(p.hp * 0.04 * p.burn_stacks)
+                dmg = int(p.hp * 0.02 * p.burn_stacks)
                 p.current_hp -= max(1, dmg)
                 # 判断对手是否有煤渣草特性 (对手的在场精灵)
                 enemy_team_id = "b" if team_id == "a" else "a"
@@ -629,6 +629,17 @@ def _apply_mark_turn_end(state: BattleState) -> None:
         solar_mark = my_marks.get("solar_mark", 0)
         if solar_mark > 0:
             p.gain_energy(solar_mark)
+
+
+def _clear_mirror_buff(leaving: 'Pokemon', state: 'BattleState', team: str) -> None:
+    """公平鸽下场时，清除对手 ability_state 里指向自己的 mirror_buff_to 引用。"""
+    enemy_team = "b" if team == "a" else "a"
+    enemy_list = state.team_a if enemy_team == "a" else state.team_b
+    enemy_idx  = state.current_a if enemy_team == "a" else state.current_b
+    if enemy_idx < len(enemy_list):
+        enemy = enemy_list[enemy_idx]
+        if enemy.ability_state.get("mirror_buff_to") is leaving:
+            enemy.ability_state.pop("mirror_buff_to", None)
 
 
 def _apply_mark_on_enter(state: BattleState, team: str, pokemon: 'Pokemon') -> None:
@@ -855,6 +866,7 @@ def _execute_with_counter(state: BattleState, team: str, action: Action,
         old_pokemon = current
         switch_snapshot = current.copy_state()
         current.on_switch_out()
+        _clear_mirror_buff(old_pokemon, state, team)  # 公平鸽下场时清除对手镜像引用
 
         # 特性: 离场触发 (翠顶夫人洁癖)
         transfer_ctx = {}
@@ -1188,10 +1200,11 @@ def _resolve_self_counters(state, current, enemy, skill, enemy_skill,
             current.ability_state["last_counter_success_turn"] = state.turn
             _handle_counter_success_ability(state, current, skill)
             _trigger_ally_counter_effects(state, team, enemy)
-        if counter_result and counter_result.get("force_switch"):
-            result["force_switch"] = True
-        if counter_result and counter_result.get("force_enemy_switch"):
-            result["force_enemy_switch"] = True
+            # 应对效果里的脱离标签：只有应对成功时才触发
+            if counter_result and counter_result.get("force_switch"):
+                result["force_switch"] = True
+            if counter_result and counter_result.get("force_enemy_switch"):
+                result["force_enemy_switch"] = True
 
     return damage
 
@@ -1259,10 +1272,17 @@ def _resolve_enemy_counters(state, current, enemy, skill, enemy_skill,
                      if not p.is_fainted and i != idx]
             if alive:
                 current.on_switch_out()
-                new_idx = random.choice(alive)
                 if team == "a":
-                    state.current_a = new_idx
+                    # 玩家方被逼退 → 弹选人面板
+                    state.current_a = alive[0]  # 暂时占位
+                    state.pending_switch_requests.append({
+                        "team": "a",
+                        "reason": "force_switch",
+                        "alive": alive,
+                    })
                 else:
+                    # AI方被逼退 → 随机选
+                    new_idx = random.choice(alive)
                     state.current_b = new_idx
 
 
@@ -1352,11 +1372,19 @@ def _handle_post_skill_switches(state, current, enemy, result, team, team_list, 
         alive = [i for i, p in enumerate(enemy_list_ref) if not p.is_fainted and i != eidx]
         if alive:
             enemy.on_switch_out()
-            new_idx = random.choice(alive)
-            if team == "a":
-                state.current_b = new_idx
+            if team == "b":
+                # AI用技能逼退玩家 → 玩家手动选
+                enemy_list_ref[eidx].on_switch_out()
+                state.current_a = alive[0]  # 暂时占位
+                state.pending_switch_requests.append({
+                    "team": "a",
+                    "reason": "force_switch",
+                    "alive": alive,
+                })
             else:
-                state.current_a = new_idx
+                # 玩家用技能逼退AI → AI随机选
+                new_idx = random.choice(alive)
+                state.current_b = new_idx
 
 
 def _post_skill_effects(state, current, enemy, skill, enemy_skill, result, team) -> None:
